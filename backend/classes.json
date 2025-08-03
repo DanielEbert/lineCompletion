@@ -1,0 +1,1 @@
+{"ContextText": "class ContextText(BaseModel):\n    context: str"}
