@@ -5,9 +5,17 @@ import tree_sitter_python as tsp
 import json
 import dataclasses
 from dataclasses import dataclass
+import builtins
 import time
+import inspect
 
 PY_LANG = tree_sitter.Language(tsp.language())
+builtin_names = set([
+    name for name in dir(builtins)
+    if inspect.isbuiltin(getattr(builtins, name))   # built-in functions like print
+    or inspect.isfunction(getattr(builtins, name))  # rarely used but covers some cases
+    or inspect.isclass(getattr(builtins, name))     # types and classes
+])
 
 
 @dataclass
@@ -57,7 +65,7 @@ def get_funcs(func_name: str, root_dir: str):
         tree = tree_cache.get(filepath)
         root_node = tree.root_node
 
-        node = root_node.named_descendant_for_point_range((line - 1, 0), (line, 0))
+        node = root_node.named_descendant_for_point_range((line - 1, 0), (line - 1, 1000))
         if not node:
             continue
 
@@ -82,7 +90,65 @@ def get_funcs(func_name: str, root_dir: str):
     return funcs
 
 
+def get_called_functions_and_classes(src_code: str):
+    parser = tree_sitter.Parser(PY_LANG)
+    tree = parser.parse(src_code)
+
+    query_string = """
+    [
+      ;; Case 1: Matches simple calls like `print()`
+      (call
+        function: (identifier) @function_name)
+
+      ;; Case 2: Matches attribute calls like `obj.method()`
+      ;; and captures only the final 'method' part.
+      (call
+        function: (attribute
+                   attribute: (identifier) @function_name))
+    ]
+    """
+
+    query = tree_sitter.Query(PY_LANG, query_string)
+    cursor = tree_sitter.QueryCursor(query)
+    matches = cursor.matches(tree.root_node)
+    functions_and_classes = list(set([m[1]['function_name'][0].text.decode('utf-8') for m in matches]) - builtin_names)
+
+    breakpoint()
+
+# idea is that if we call a class, we drag the class body into this definition. similar for functions
+# TODO: exclude stdlib functions
+
+my_code = b"""
+import os
+import pandas as pd
+
+class MyProcessor:
+    def process(self, data):
+        df = pd.DataFrame(data)
+        print("Processing data...")
+        return df.head()
+
 def main():
+    data = {'col1': [1, 2], 'col2': [3, 4]}
+    processor = MyProcessor()  # Class call (instantiation)
+    result = processor.process(data) # Method call
+    
+    # Simple function call
+    print(result)
+
+    # Chained call
+    path = os.path.join("my", "path") 
+    
+    # Function call with a function as an argument
+    sorted_list = sorted([3, 1, 2])
+
+if __name__ == "__main__":
+    main()
+"""
+
+def main():
+    get_called_functions_and_classes(my_code)
+
     root_dir = os.path.expanduser('~/P/lineCompletion')
     func_name = r'parse'
 
