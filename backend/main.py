@@ -9,6 +9,7 @@ import tree_sitter
 import tree_sitter_python as tsp
 import inspect
 import builtins
+from exa_py import Exa
 
 
 PY_LANG = tree_sitter.Language(tsp.language())
@@ -18,6 +19,8 @@ builtin_names = set([
     or inspect.isfunction(getattr(builtins, name))  # rarely used but covers some cases
     or inspect.isclass(getattr(builtins, name))     # types and classes
 ])
+
+exa = Exa(api_key = "6347a63a-2d60-449d-b3a8-22ce617ec798")
 
 
 class TreeCache:
@@ -58,6 +61,7 @@ class SymbolLocation(BaseModel):
     startCol: int
     endLine: int
     endCol: int  # exclusive
+    expand_to_class: bool = False
 
 
 app = FastAPI()
@@ -249,6 +253,86 @@ if num == 0:
 
 """
 
+search_system_prompt = '''\
+You are a search query generation assistant. Your sole purpose is to generate a single, effective Google search query that will help a developer or an AI code completion model find the necessary information to complete a piece of code.
+
+You will be provided with a code snippet containing a placeholder `/*@@*/`. Your task is to analyze the code to understand its high-level objective and the immediate task at the placeholder.
+
+Based on your analysis, generate a concise and effective search query. The query should be designed to find the most relevant library, module, function, or common programming pattern needed to proceed with the code.
+
+Your Instructions:
+1. Analyze the Code Context: Carefully examine the provided code, including imported libraries, defined variables, and the overall logic to understand what the program is trying to achieve.
+2. Identify the Core Task: Determine the specific problem that needs to be solved at the `/*@@*/` location. What is the most likely next step?
+3. Formulate an Effective Query: Create a search query that describes this core task. Your query should be broad enough to find canonical documentation or popular libraries but specific enough to be relevant. Focus on the "what," not the "how." For example, if the code needs to read a specific file type, a good query would be "python library to read parquet file," not "python open file and parse bytes."
+4. Strict Output Format: You must output *only* the raw text of the search query. Do not include any other text, explanations, introductory sentences, or markdown formatting.
+
+---
+
+Example 1: Finding a Data Manipulation Method
+
+Input:
+```python
+import pandas as pd
+
+# Load data from a CSV file
+df = pd.read_csv('sales_data.csv')
+
+# Calculate the total sales for each product category
+/*@@*/
+```
+
+Output:
+pandas group by sum
+
+---
+
+Example 2: Finding a Library for a Specific Task
+
+Input:
+```python
+from PIL import Image
+import os
+
+input_folder = "source_images"
+output_folder = "processed_images"
+
+for filename in os.listdir(input_folder):
+    if filename.endswith((".png", ".jpg", ".jpeg")):
+        img_path = os.path.join(input_folder, filename)
+        img = Image.open(img_path)
+        
+        # Resize the image to a standard thumbnail size
+        /*@@*/
+```
+
+Output:
+python pillow resize image
+
+---
+
+### Example 3: Finding API/Framework Usage
+
+Input:
+```javascript
+const express = require('express');
+const app = express();
+const port = 3000;
+
+app.get('/api/data', (req, res) => {
+  // The goal is to return a JSON response to the client
+  const myData = { status: 'success', value: 42 };
+  /*@@*/
+});
+
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
+```
+
+Output:
+express js send json response
+'''
+
 client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY"),
 )
@@ -261,6 +345,54 @@ def parse_llm_completion_output(output: str) -> list[str]:
         raise ValueError(f"Expected exactly 3 completions separated by '---', but found {len(parts)}.")
 
     return [completion.strip(' \n\t`') for completion in parts if completion.strip(' \n\t`')]
+
+def generate_search_query(context: str):
+    model = 'gemini-2.5-flash'
+
+    contents = [
+        types.Content(
+            role="user",
+            parts=[
+                types.Part.from_text(text=context),
+            ],
+        ),
+    ]
+    generate_content_config = types.GenerateContentConfig(
+        thinking_config = types.ThinkingConfig(
+            thinking_budget=128,
+        ),
+        system_instruction=[
+            types.Part.from_text(text=search_system_prompt),
+        ],
+        temperature=0
+    ) 
+
+    import time
+    start_time = time.time()
+    search_query = client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=generate_content_config,
+    ).text
+    print('inference time:', round(time.time() - start_time), 2)
+    return search_query
+
+
+def search(context: str):
+    search_query = generate_search_query(context)
+    print('Search query:', search_query)
+
+    search_results = exa.search_and_contents(search_query, text = True, type = "fast")
+
+    ret = 'Search Results:\n'
+    for result in search_results.results:
+        ret += f'{result.title}:\n'
+        ret += result.text
+        ret += '\n\n---\n\n'
+    
+    ret += 'End of Search Results'
+
+    return ret
 
 
 def generate(context: str):
@@ -292,14 +424,22 @@ def generate(context: str):
         config=generate_content_config,
     ).text)
     print('inference time:', round(time.time() - start_time), 2)
+
     return ret
 
 
 @app.post('/suggest')
 async def suggest(contextText: ContextText):
     print('on /suggest')
+    search_results = search(contextText.context)
+
+    context = f'{search_results}\n\nSource Code:\n{contextText.context}'
+
+    print('context:')
+    print(context)
+
     return {
-        'response': generate(contextText.context)
+        'response': generate(context)
     }
 
 
@@ -366,11 +506,22 @@ async def symbol_source(symbol_locations: list[SymbolLocation]):
             continue
 
         node_func_name = node.child_by_field_name('name').text.decode('utf-8')
-        if symbol_location.name not in node_func_name:
+        if symbol_location.name and symbol_location.name not in node_func_name:
             # occurs in e.g. a '# def xyz ... ' comment
             continue
+    
+        if node.type == 'function_definition' and symbol_location.expand_to_class:
+            parent = node.parent
+            while parent:
+                if parent.type == 'class_definition':
+                    node = parent
+                parent = parent.parent
 
-        ret.append(node.text.decode('utf-8'))
+        ret.append({
+            'start_line': node.start_point.row,
+            'start_col': node.start_point.column,
+            'text': node.text.decode('utf-8')
+        })
     
     return ret
 

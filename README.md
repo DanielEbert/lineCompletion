@@ -24,3 +24,14 @@ python main.py
 
 Run VSCode Frontend:
 - In VSCode, press F5 or go to 'Run and Debug' -> 'Run Extension' Green Play Button
+
+
+### TODO 
+
+- remove duplicate code
+- would be good if we could find context of usage of our function, e.g. in tests
+
+##### Search
+
+
+- 

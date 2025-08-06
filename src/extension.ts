@@ -158,8 +158,21 @@ export function activate(context: vscode.ExtensionContext) {
 				endLine = position.line + 10;
 			}
 
-			const symbolCode = document.getText(new vscode.Range(startLine, 0, endLine, 0));
-			const closeContext = insertAtPosition(symbolCode, position.line - startLine, position.character, '/*@@*/')
+			const closeContextSource = await fetchSymbolImplementation([{
+				name: '',
+				path: document.uri.fsPath,
+				startLine: position.line,
+				startCol: 0,
+				endLine: position.line,
+				endCol: 100000,
+				expand_to_class: true
+			}]);
+			if (!closeContextSource) {
+				console.error('failed to fetch close context implementation')
+				return [];
+			}
+
+			const closeContext = insertAtPosition(closeContextSource[0].text, position.line - closeContextSource[0].start_line, position.character, '/*@@*/')
 			console.log(closeContext)
 
 			const symbolLocations = await fetchSymbolLocations(document.uri.fsPath, startLine, endLine);
@@ -171,17 +184,16 @@ export function activate(context: vscode.ExtensionContext) {
 				return [];
 			}
 
-			symbolImplementations.unshift(closeContext)
+			symbolImplementations.unshift({text: closeContext})
 
 			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
 				return `\`\`\`python
-${impl}
+${impl.text}
 \`\`\``;
 			});
 
 			const prompt = wrappedSymbolImplementations.join('\n\n')
 			console.log(prompt)
-			// TODO: add each symbolImplementation in its own ```python block
 
 			console.log('starting fetch')	
 			const suggestions = await fetchSuggestions(prompt)
