@@ -114,18 +114,11 @@ let llmCompletionTriggered = false;
 export function activate(context: vscode.ExtensionContext) {
 	console.log('linecompletion is active');
 
-	const triggerCommand = vscode.commands.registerCommand('linecompletion.suggestFromContext', () => {
-		llmCompletionTriggered = true;
-		vscode.commands.executeCommand('editor.action.triggerSuggest');
-	})
-
-	context.subscriptions.push(triggerCommand)
-
-	const suggestionProvider = vscode.languages.registerCompletionItemProvider(
-		'python',
-	{
-		async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext) {
-			if (!llmCompletionTriggered) return;
+	const provider: vscode.InlineCompletionItemProvider = {
+		async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, context: vscode.InlineCompletionContext, token: vscode.CancellationToken) {
+			if (!llmCompletionTriggered) {
+				return;
+			}	
 			llmCompletionTriggered = false;
 
 			let contextLine = position.line;
@@ -146,8 +139,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const enclosingFunctionSymbol = findEnclosingFunctionSymbol(symbols, contextPosition);
 
-			let startLine = null;
-			let endLine = null;
+			let startLine: number;
+			let endLine: number;
 			
 			if (enclosingFunctionSymbol) {
 				startLine = enclosingFunctionSymbol.range.start.line;
@@ -174,6 +167,29 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const closeContext = insertAtPosition(closeContextSource[0].text, position.line - closeContextSource[0].start_line, position.character, '/*@@*/')
 			console.log(closeContext)
+
+			if (enclosingFunctionSymbol) {
+				let referenceLocations = await vscode.commands.executeCommand<vscode.Location[]>(
+					'vscode.executeReferenceProvider',
+					document.uri,
+					enclosingFunctionSymbol.selectionRange.start
+				);
+				referenceLocations = referenceLocations.filter(
+					location => location.range.start.line !== enclosingFunctionSymbol.selectionRange.start.line || location.uri.fsPath !== document.uri.fsPath
+				)
+				console.log(referenceLocations)
+				const referenceImplementations = await fetchSymbolImplementation(referenceLocations.map(ref => ({
+					name: '',
+					path: ref.uri.fsPath,
+					startLine: ref.range.start.line,
+					startCol: ref.range.start.character,
+					endLine: ref.range.end.line,
+					endCol: ref.range.end.character,  // exclusive
+				})))
+				// for each referenceLocation, get the surrounding function or class or context (if in global context)
+				console.log(referenceImplementations)
+				// TODO: store all contexts and their uri and line range in dict, so that we can later easily remove duplicates
+			}
 
 			const symbolLocations = await fetchSymbolLocations(document.uri.fsPath, startLine, endLine);
 			const symbolImplementationLocations = await getSymbolLocations(symbolLocations, document);
@@ -204,32 +220,20 @@ ${impl.text}
 				return [];
 			}
 
-			const wordRange = document.getWordRangeAtPosition(position)
-
-			let replaceRange: vscode.Range;
-			let currentWordPrefix: string;
-
-			if (wordRange) {
-				replaceRange = new vscode.Range(wordRange.start, position)
-				currentWordPrefix = document.getText(replaceRange)
-			} else {
-				replaceRange = new vscode.Range(position, position)
-				currentWordPrefix = ''
-			}
-
-			return suggestions.map((suggestion, index) => {
-				const completion = new vscode.CompletionItem(currentWordPrefix + suggestion)
-				completion.insertText = new vscode.SnippetString(currentWordPrefix + suggestion)
-				completion.sortText = '\0' + index.toString().padStart(5, '0');
-				completion.documentation = new vscode.MarkdownString((index + 1).toString())
-				completion.range = replaceRange;
-				completion.kind = vscode.CompletionItemKind.Snippet;
-				return completion;
-			})
+			return suggestions.map((suggestion) => {
+				return new vscode.InlineCompletionItem(suggestion)
+			});
 		}
+	};
+
+	vscode.languages.registerInlineCompletionItemProvider({ language: 'python' }, provider);
+
+	const triggerCommand = vscode.commands.registerCommand('linecompletion.suggestFromContext', () => {
+		llmCompletionTriggered = true;
+		vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
 	});
 
-	context.subscriptions.push(suggestionProvider);
+	context.subscriptions.push(triggerCommand)
 }
 
 // TODO: typing

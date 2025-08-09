@@ -30,6 +30,7 @@ Run VSCode Frontend:
 
 - remove duplicate code
 - would be good if we could find context of usage of our function, e.g. in tests
+- when inserting text, we are indented. need to find current indentation level based on context. probably this works: get position line and check leading spaces until cursor or first non whitespace
 
 ##### Search
 

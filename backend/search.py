@@ -49,6 +49,7 @@ def find_main_content(soup: BeautifulSoup) -> BeautifulSoup:
         for tag in body.select(junk_selector):
             tag.decompose()
             
+            
     return body
 
 
