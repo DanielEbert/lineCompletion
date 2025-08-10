@@ -33,46 +33,56 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		webviewView.webview.onDidReceiveMessage(async (data) => {
 			const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
 
-			switch(data.type) {
-				case 'addFile': {
-					const fileUri = await vscode.window.showOpenDialog({canSelectMany: false});
-					if (fileUri && fileUri.length > 0) {
-						// backend can also fetch
-						const newContext = [...currentContext, {type: 'File', context: fileUri[0].fsPath}]
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
-					}
-					break;
-				}
-				case 'addUrl': {
-					const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
-					if (url && url.length > 0) {
-						// TODO: on backend we want to fetch and summarize/parse website
-						const newContext = [...currentContext, {type: 'Url', context: url}]
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
-					}
-					break;
-				}
-				// TODO: add option to edit inline
-				case 'addText': {
-					const text = await vscode.window.showInputBox({prompt: 'Enter Text', placeHolder: 'Enter text here...'})
-					if (text && text.length > 0) {
-						const newContext = [...currentContext, {type: 'Text', context: text}]
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
-					}
-					break;
-				}
-				case 'updateTextContext': {
-					if (data.index >= 0 && data.index < currentContext.length) {
-						const newContext = [...currentContext];
-						newContext[data.index].context = data.context;
-						await this._context.workspaceState.update('llmContext', newContext);
-					}
-					break;
-				}
-				case 'removeContext': {
+switch(data.type) {
+case 'addFile': {
+const fileUri = await vscode.window.showOpenDialog({canSelectMany: false});
+if (fileUri && fileUri.length > 0) {
+// backend can also fetch
+const newContext = [...currentContext, {type: 'File', context: fileUri[0].fsPath}]
+await this._context.workspaceState.update('llmContext', newContext);
+this.updateView();
+}
+break;
+}
+case 'addUrl': {
+const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
+if (url && url.length > 0) {
+// TODO: on backend we want to fetch and summarize/parse website
+const newContext = [...currentContext, {type: 'Url', context: url}]
+await this._context.workspaceState.update('llmContext', newContext);
+this.updateView();
+}
+break;
+}
+case 'addText': {
+// Adding text now defaults to an empty string, allowing inline editing.
+const newContext = [...currentContext, {type: 'Text', context: ""}]
+await this._context.workspaceState.update('llmContext', newContext);
+this.updateView();
+break;
+}
+case 'getLocalFiles': {
+if (!data.query || data.query.length < 1) {
+this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: [], index: data.index });
+break;
+}
+// Use findFiles - it's async so we need await.
+// We exclude node_modules and limit results to 50 for performance.
+const files = await vscode.workspace.findFiles(`**/*${data.query}*`, '**/node_modules/**', 50);
+const suggestions = files.map(file => vscode.workspace.asRelativePath(file.path));
+
+this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
+break;
+}
+case 'updateTextContext': {
+if (data.index >= 0 && data.index < currentContext.length) {
+const newContext = [...currentContext];
+newContext[data.index].context = data.context;
+await this._context.workspaceState.update('llmContext', newContext);
+}
+break;
+}
+case 'removeContext': {
                     const newContext = currentContext.filter((_, index) => index !== data.index);
                     await this._context.workspaceState.update('llmContext', newContext);
                     this.updateView();
@@ -87,10 +97,10 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
                     this.updateView();
                     break;
                 }
-				case 'toggleWebSearch': {
-					await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
-				}
-			}
+case 'toggleWebSearch': {
+await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
+}
+}
 		})
 	}
 

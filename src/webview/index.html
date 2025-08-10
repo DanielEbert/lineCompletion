@@ -327,6 +327,42 @@
         .icon-clear::before {
             content: '🗑️';
         }
+
+        .suggestion-wrapper {
+            position: relative;
+        }
+
+        .suggestion-box {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            min-width: 180px;
+            border: 1px solid var(--vscode-focus-border);
+            background-color: var(--vscode-input-background);
+            z-index: 100;
+            max-height: 150px;
+            overflow-y: auto;
+            border-radius: 4px;
+            margin-top: 2px;
+        }
+
+        .suggestion-item {
+            padding: 6px 12px;
+            cursor: pointer;
+            color: var(--vscode-input-foreground);
+            font-family: var(--vscode-editor-font-family);
+            font-size: var(--vscode-editor-font-size);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .suggestion-item.selected {
+            background-color: var(--vscode-focus-border);
+            color: var(--vscode-button-foreground);
+        }
     </style>
 </head>
 
@@ -367,6 +403,10 @@
         const vscode = acquireVsCodeApi();
 
         let webSearchEnabled = false;
+        const suggestionState = {
+            suggestions: [],
+            selectedIndex: -1,
+        };
 
         function debounce(func, wait) {
             let timeout;
@@ -377,22 +417,220 @@
             };
         }
 
+        const debouncedUpdate = debounce((index, newContent) => {
+            vscode.postMessage({
+                type: 'updateTextContext',
+                index: index,
+                context: newContent
+            });
+        }, 500);
+
+        function updateWebSearchUI() {
+            const webSearchToggle = document.getElementById('web-search-toggle');
+            const searchStatus = document.getElementById('search-status');
+            if (webSearchEnabled) {
+                webSearchToggle.classList.add('active');
+                searchStatus.textContent = 'Web search: ON';
+            } else {
+                webSearchToggle.classList.remove('active');
+                searchStatus.textContent = 'Web search: OFF';
+            }
+        }
+
+        function hideSuggestions(index) {
+            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
+            if (suggestionBox) {
+                suggestionBox.style.display = 'none';
+                suggestionBox.innerHTML = '';
+            }
+            suggestionState.suggestions = [];
+            suggestionState.selectedIndex = -1;
+        }
+
+        function handleTextareaInput(event) {
+            const textarea = event.target;
+            const index = parseInt(textarea.dataset.index, 10);
+
+            // auto-resize
+            textarea.style.height = 'auto';
+            textarea.style.height = (textarea.scrollHeight) + 'px';
+
+            debouncedUpdate(index, textarea.value);
+
+            const value = textarea.value;
+            const cursorPosition = textarea.selectionStart;
+            const atIndex = value.lastIndexOf('@', cursorPosition - 1);
+
+            if (atIndex !== -1) {
+                const textAfterAt = value.substring(atIndex + 1, cursorPosition);
+                if (!/\s/.test(textAfterAt)) { // Don't trigger if there's a space after @
+                    vscode.postMessage({ type: 'getLocalFiles', query: textAfterAt, index });
+                    return;
+                }
+            }
+            hideSuggestions(index);
+        }
+
+        function handleTextareaKeydown(event) {
+            const textarea = event.target;
+            const index = parseInt(textarea.dataset.index, 10);
+            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
+
+            if (suggestionBox.style.display !== 'block' || suggestionState.suggestions.length === 0) {
+                return;
+            }
+
+            switch (event.key) {
+                case 'ArrowDown':
+                    event.preventDefault();
+                    suggestionState.selectedIndex = (suggestionState.selectedIndex + 1) % suggestionState.suggestions.length;
+                    updateSelectedSuggestion(index);
+                    break;
+                case 'ArrowUp':
+                    event.preventDefault();
+                    suggestionState.selectedIndex = (suggestionState.selectedIndex - 1 + suggestionState.suggestions.length) % suggestionState.suggestions.length;
+                    updateSelectedSuggestion(index);
+                    break;
+                case 'Tab':
+                case 'Enter':
+                    event.preventDefault();
+                    if (suggestionState.selectedIndex !== -1) {
+                        acceptSuggestion(textarea, suggestionState.suggestions[suggestionState.selectedIndex]);
+                    }
+                    break;
+                case 'Escape':
+                    event.preventDefault();
+                    hideSuggestions(index);
+                    break;
+            }
+        }
+
+        function updateSelectedSuggestion(index) {
+            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
+            const items = suggestionBox.children;
+            for (let i = 0; i < items.length; i++) {
+                if (i === suggestionState.selectedIndex) {
+                    items[i].classList.add('selected');
+                    items[i].scrollIntoView({ block: 'nearest' });
+                } else {
+                    items[i].classList.remove('selected');
+                }
+            }
+        }
+
+        function acceptSuggestion(textarea, filePath) {
+            const index = parseInt(textarea.dataset.index, 10);
+            const value = textarea.value;
+            const cursorPosition = textarea.selectionStart;
+            const atIndex = value.lastIndexOf('@', cursorPosition - 1);
+
+            if (atIndex !== -1) {
+                const newValue = value.substring(0, atIndex + 1) + filePath + ' ' + value.substring(cursorPosition);
+                textarea.value = newValue;
+                textarea.focus();
+                const newCursorPos = atIndex + filePath.length + 2;
+                textarea.setSelectionRange(newCursorPos, newCursorPos);
+
+                hideSuggestions(index);
+                debouncedUpdate(index, textarea.value);
+                // Trigger resize
+                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        }
+
+        function updateContextList(context) {
+            const contextList = document.getElementById('context-list');
+            while (contextList.firstChild) {
+                contextList.removeChild(contextList.firstChild);
+            }
+
+            if (context.length === 0) {
+                const emptyDiv = document.createElement('div');
+                emptyDiv.className = 'empty-state';
+                emptyDiv.innerHTML = `
+                    <div class="icon">📋</div>
+                    <div>No context items yet</div>
+                    <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Add files, URLs, or text to get started</div>
+                `;
+                contextList.appendChild(emptyDiv);
+                return;
+            }
+
+            context.forEach((item, index) => {
+                const li = document.createElement('li');
+                li.className = 'context-item';
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'item-content';
+
+                if (item.type !== 'Text') {
+                    const headerDiv = document.createElement('div');
+                    headerDiv.className = 'item-header';
+                    const badge = document.createElement('span');
+                    badge.className = `item-badge badge-${item.type.toLowerCase()}`;
+                    badge.textContent = item.type;
+                    headerDiv.appendChild(badge);
+                    const sourceSpan = document.createElement('span');
+                    sourceSpan.className = item.type === 'File' ? 'item-source' : 'web-item-source';
+                    sourceSpan.textContent = item.context;
+                    sourceSpan.title = item.context;
+                    headerDiv.appendChild(sourceSpan);
+                    contentDiv.appendChild(headerDiv);
+                }
+
+                if (item.type === 'Text') {
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'suggestion-wrapper';
+                    const suggestionBox = document.createElement('div');
+                    suggestionBox.className = 'suggestion-box';
+                    suggestionBox.id = `suggestion-box-${index}`;
+                    const textarea = document.createElement('textarea');
+                    textarea.className = 'editable-text';
+                    textarea.value = item.context;
+                    textarea.placeholder = "Type '@' to mention a file...";
+                    textarea.dataset.index = index;
+                    wrapper.appendChild(suggestionBox);
+                    wrapper.appendChild(textarea);
+                    contentDiv.appendChild(wrapper);
+
+                    textarea.addEventListener('input', handleTextareaInput);
+                    textarea.addEventListener('keydown', handleTextareaKeydown);
+                    textarea.addEventListener('blur', () => hideSuggestions(index));
+
+                    setTimeout(() => {
+                        textarea.style.height = 'auto';
+                        textarea.style.height = (textarea.scrollHeight) + 'px';
+                    }, 0);
+                }
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'delete-btn';
+                deleteBtn.innerHTML = '×';
+                deleteBtn.title = 'Remove item';
+                deleteBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'removeContext', index: index });
+                });
+                li.appendChild(contentDiv);
+                li.appendChild(deleteBtn);
+                contextList.appendChild(li);
+            });
+            updateStats(context.length);
+        }
+
+        function updateStats(count) {
+            const statsDiv = document.querySelector('.stats');
+            if (statsDiv) {
+                const countSpan = statsDiv.querySelector('span:first-child');
+                countSpan.textContent = `${count} context item${count !== 1 ? 's' : ''}`;
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const addFileBtn = document.getElementById('add-file-btn');
             const addUrlBtn = document.getElementById('add-url-btn');
             const addTextBtn = document.getElementById('add-text-btn');
             const webSearchToggle = document.getElementById('web-search-toggle');
             const clearAllBtn = document.getElementById('clear-all-btn');
-            const contextList = document.getElementById('context-list');
-            const searchStatus = document.getElementById('search-status');
-
-            const debouncedUpdate = debounce((index, newContent) => {
-                vscode.postMessage({
-                    type: 'updateTextContext',
-                    index: index,
-                    context: newContent
-                });
-            }, 500);
 
             addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
             addUrlBtn.addEventListener('click', () => vscode.postMessage({ type: 'addUrl' }));
@@ -402,129 +640,52 @@
             webSearchToggle.addEventListener('click', () => {
                 webSearchEnabled = !webSearchEnabled;
                 updateWebSearchUI();
-                vscode.postMessage({
-                    type: 'toggleWebSearch',
-                    enabled: webSearchEnabled
-                });
+                vscode.postMessage({ type: 'toggleWebSearch', enabled: webSearchEnabled });
             });
-
-            function updateWebSearchUI() {
-                if (webSearchEnabled) {
-                    webSearchToggle.classList.add('active');
-                    searchStatus.textContent = 'Web search: ON';
-                } else {
-                    webSearchToggle.classList.remove('active');
-                    searchStatus.textContent = 'Web search: OFF';
-                }
-            }
 
             window.addEventListener('message', event => {
                 const message = event.data;
-                if (message.type === 'update') {
-                    updateContextList(message.context);
-                } else if (message.type === 'webSearchState') {
-                    webSearchEnabled = message.enabled;
-                    updateWebSearchUI();
+                switch (message.type) {
+                    case 'update':
+                        updateContextList(message.context);
+                        break;
+                    case 'webSearchState':
+                        webSearchEnabled = message.enabled;
+                        updateWebSearchUI();
+                        break;
+                    case 'fileSuggestions':
+                        {
+                            const { suggestions, index } = message;
+                            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
+                            if (suggestionBox) {
+                                suggestionBox.innerHTML = '';
+                                if (suggestions.length > 0) {
+                                    suggestionState.suggestions = suggestions;
+                                    suggestionState.selectedIndex = 0;
+                                    suggestions.forEach((file, i) => {
+                                        const item = document.createElement('div');
+                                        item.className = 'suggestion-item';
+                                        item.textContent = file;
+                                        item.title = file;
+                                        item.addEventListener('mousedown', (e) => {
+                                            e.preventDefault();
+                                            const textarea = document.querySelector(`textarea[data-index="${index}"]`);
+                                            acceptSuggestion(textarea, file);
+                                        });
+                                        suggestionBox.appendChild(item);
+                                    });
+                                    updateSelectedSuggestion(index);
+                                    suggestionBox.style.display = 'block';
+                                } else {
+                                    hideSuggestions(index);
+                                }
+                            }
+                            break;
+                        }
                 }
-            });
-
-            function updateContextList(context) {
-                while (contextList.firstChild) {
-                    contextList.removeChild(contextList.firstChild);
-                }
-
-                if (context.length === 0) {
-                    const emptyDiv = document.createElement('div');
-                    emptyDiv.className = 'empty-state';
-                    emptyDiv.innerHTML = `
-                        <div class="icon">📋</div>
-                        <div>No context items yet</div>
-                        <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Add files, URLs, or text to get started</div>
-                    `;
-                    contextList.appendChild(emptyDiv);
-                    return;
-                }
-
-                context.forEach((item, index) => {
-                    const li = document.createElement('li');
-                    li.className = 'context-item';
-
-                    const contentDiv = document.createElement('div');
-                    contentDiv.className = 'item-content';
-
-                    if (item.type !== 'Text') {
-                        const headerDiv = document.createElement('div');
-                        headerDiv.className = 'item-header';
-
-                        const badge = document.createElement('span');
-                        badge.className = `item-badge badge-${item.type.toLowerCase()}`;
-                        badge.textContent = item.type;
-                        headerDiv.appendChild(badge);
-
-                        const sourceSpan = document.createElement('span');
-                        sourceSpan.className = item.type === 'File' ? 'item-source' : 'web-item-source';
-                        sourceSpan.textContent = item.context;
-                        sourceSpan.title = item.context;
-                        headerDiv.appendChild(sourceSpan);
-
-                        contentDiv.appendChild(headerDiv);
-                    }
-
-                    if (item.type === 'Text') {
-                        const textarea = document.createElement('textarea');
-                        textarea.className = 'editable-text';
-                        textarea.value = item.context;
-                        textarea.placeholder = "Enter your text context here...";
-
-                        textarea.addEventListener('input', () => {
-                            textarea.style.height = 'auto';
-                            textarea.style.height = (textarea.scrollHeight) + 'px';
-                            debouncedUpdate(index, textarea.value);
-                        });
-
-                        contentDiv.appendChild(textarea);
-
-                        setTimeout(() => {
-                            textarea.style.height = 'auto';
-                            textarea.style.height = (textarea.scrollHeight) + 'px';
-                        }, 0);
-                    }
-
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.className = 'delete-btn';
-                    deleteBtn.innerHTML = '×';
-                    deleteBtn.title = 'Remove item';
-                    deleteBtn.addEventListener('click', () => {
-                        vscode.postMessage({ type: 'removeContext', index: index });
-                    });
-
-                    li.appendChild(contentDiv);
-                    li.appendChild(deleteBtn);
-                    contextList.appendChild(li);
-                });
-
-                updateStats(context.length);
-            }
-
-            function updateStats(count) {
-                const statsDiv = document.querySelector('.stats');
-                if (statsDiv) {
-                    const countSpan = statsDiv.querySelector('span:first-child');
-                    countSpan.textContent = `${count} context item${count !== 1 ? 's' : ''}`;
-                }
-            }
-
-            const deleteButtons = document.querySelectorAll('.delete-btn');
-            deleteButtons.forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.target.closest('.context-item').remove();
-                    const remaining = document.querySelectorAll('.context-item').length;
-                    updateStats(remaining);
-                });
             });
 
             vscode.postMessage({ type: 'requestUpdate' });
-
             updateWebSearchUI();
         });
     </script>
