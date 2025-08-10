@@ -9,7 +9,6 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -25,7 +24,26 @@
         "mac": "ctrl+shift+w",
         "when": "editorTextFocus"
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "llm-context-sidebar",
+          "title": "LLM Context",
+          "icon": "img/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "llm-context-sidebar": [
+        {
+          "id": "llmContextView",
+          "name": "LLM Context",
+          "icon": "img/icon.svg",
+          "type": "webview"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

@@ -1,6 +1,114 @@
 import * as vscode from 'vscode';
 import fetch from 'node-fetch'
-import MarkdownIt from 'markdown-it'
+import * as fs from 'fs';
+
+
+export function getNonce() {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+        text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+}
+
+// TODO: could be stored in extension memory
+
+export class ContextViewProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'llmContextView';
+	private _view?: vscode.WebviewView;
+
+	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) {}
+
+	public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext, token: vscode.CancellationToken): Thenable<void> | void {
+		this._view = webviewView;
+
+		webviewView.webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'src', 'webview')]
+		}
+
+		webviewView.webview.html = this._getHtmlForWebview(webviewView.webview)
+
+		webviewView.webview.onDidReceiveMessage(async (data) => {
+			const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
+
+			switch(data.type) {
+				case 'addFile': {
+					const fileUri = await vscode.window.showOpenDialog({canSelectMany: false});
+					if (fileUri && fileUri.length > 0) {
+						// backend can also fetch
+						const newContext = [...currentContext, {type: 'File', context: fileUri[0].fsPath}]
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'addUrl': {
+					const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
+					if (url && url.length > 0) {
+						// TODO: on backend we want to fetch and summarize/parse website
+						const newContext = [...currentContext, {type: 'Url', context: url}]
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				// TODO: add option to edit inline
+				case 'addText': {
+					const text = await vscode.window.showInputBox({prompt: 'Enter Text', placeHolder: 'Enter text here...'})
+					if (text && text.length > 0) {
+						const newContext = [...currentContext, {type: 'Text', context: text}]
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'updateTextContext': {
+					if (data.index >= 0 && data.index < currentContext.length) {
+						const newContext = [...currentContext];
+						newContext[data.index].context = data.context;
+						await this._context.workspaceState.update('llmContext', newContext);
+					}
+					break;
+				}
+				case 'removeContext': {
+                    const newContext = currentContext.filter((_, index) => index !== data.index);
+                    await this._context.workspaceState.update('llmContext', newContext);
+                    this.updateView();
+                    break;
+                }
+                case 'clearContext': {
+                     await this._context.workspaceState.update('llmContext', []);
+                     this.updateView();
+                     break;
+                }
+                case 'requestUpdate': {
+                    this.updateView();
+                    break;
+                }
+				case 'toggleWebSearch': {
+					await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
+				}
+			}
+		})
+	}
+
+	public updateView() {
+		if (!this._view) return;
+		const context = this._context.workspaceState.get('llmContext', [])
+		this._view.webview.postMessage({type: 'update', context})
+		this._view.badge = {
+			value: context.length,
+			tooltip: `${context.length} context items`
+		}
+	}
+
+	private _getHtmlForWebview(webview: vscode.Webview) {
+		const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'index.html');
+		return fs.readFileSync(htmlPath.fsPath, 'utf8');
+	}	
+}
 
 /**
  * Checks if a line is semantically empty for Python code.
@@ -114,18 +222,16 @@ let llmCompletionTriggered = false;
 export function activate(context: vscode.ExtensionContext) {
 	console.log('linecompletion is active');
 
-	const triggerCommand = vscode.commands.registerCommand('linecompletion.suggestFromContext', () => {
-		llmCompletionTriggered = true;
-		vscode.commands.executeCommand('editor.action.triggerSuggest');
-	})
+	const contextProvider = new ContextViewProvider(context.extensionUri, context);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(ContextViewProvider.viewType, contextProvider)
+	);
 
-	context.subscriptions.push(triggerCommand)
-
-	const suggestionProvider = vscode.languages.registerCompletionItemProvider(
-		'python',
-	{
-		async provideCompletionItems(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken, context: vscode.CompletionContext) {
-			if (!llmCompletionTriggered) return;
+	const provider: vscode.InlineCompletionItemProvider = {
+		async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, completionContext: vscode.InlineCompletionContext, token: vscode.CancellationToken) {
+			if (!llmCompletionTriggered) {
+				return;
+			}	
 			llmCompletionTriggered = false;
 
 			let contextLine = position.line;
@@ -146,8 +252,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 			const enclosingFunctionSymbol = findEnclosingFunctionSymbol(symbols, contextPosition);
 
-			let startLine = null;
-			let endLine = null;
+			let startLine: number;
+			let endLine: number;
 			
 			if (enclosingFunctionSymbol) {
 				startLine = enclosingFunctionSymbol.range.start.line;
@@ -158,9 +264,45 @@ export function activate(context: vscode.ExtensionContext) {
 				endLine = position.line + 10;
 			}
 
-			const symbolCode = document.getText(new vscode.Range(startLine, 0, endLine, 0));
-			const closeContext = insertAtPosition(symbolCode, position.line - startLine, position.character, '/*@@*/')
+			const closeContextSource = await fetchSymbolImplementation([{
+				name: '',
+				path: document.uri.fsPath,
+				startLine: position.line,
+				startCol: 0,
+				endLine: position.line,
+				endCol: 100000,
+				expand_to_class: true
+			}]);
+			if (!closeContextSource) {
+				console.error('failed to fetch close context implementation')
+				return [];
+			}
+
+			const closeContext = insertAtPosition(closeContextSource[0].text, position.line - closeContextSource[0].start_line, position.character, '/*@@*/')
 			console.log(closeContext)
+
+			if (enclosingFunctionSymbol) {
+				let referenceLocations = await vscode.commands.executeCommand<vscode.Location[]>(
+					'vscode.executeReferenceProvider',
+					document.uri,
+					enclosingFunctionSymbol.selectionRange.start
+				);
+				referenceLocations = referenceLocations.filter(
+					location => location.range.start.line !== enclosingFunctionSymbol.selectionRange.start.line || location.uri.fsPath !== document.uri.fsPath
+				)
+				console.log(referenceLocations)
+				const referenceImplementations = await fetchSymbolImplementation(referenceLocations.map(ref => ({
+					name: '',
+					path: ref.uri.fsPath,
+					startLine: ref.range.start.line,
+					startCol: ref.range.start.character,
+					endLine: ref.range.end.line,
+					endCol: ref.range.end.character,  // exclusive
+				})))
+				// for each referenceLocation, get the surrounding function or class or context (if in global context)
+				console.log(referenceImplementations)
+				// TODO: store all contexts and their uri and line range in dict, so that we can later easily remove duplicates
+			}
 
 			const symbolLocations = await fetchSymbolLocations(document.uri.fsPath, startLine, endLine);
 			const symbolImplementationLocations = await getSymbolLocations(symbolLocations, document);
@@ -171,20 +313,24 @@ export function activate(context: vscode.ExtensionContext) {
 				return [];
 			}
 
-			symbolImplementations.unshift(closeContext)
+			// symbolImplementations.unshift({text: closeContext})
 
-			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
-				return `\`\`\`python
-${impl}
-\`\`\``;
-			});
+// 			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
+// 				return `\`\`\`python
+// ${impl.text}
+// \`\`\``;
+// 			});
 
-			const prompt = wrappedSymbolImplementations.join('\n\n')
-			console.log(prompt)
-			// TODO: add each symbolImplementation in its own ```python block
+			// const prompt = wrappedSymbolImplementations.join('\n\n')
+			// console.log(prompt)
 
 			console.log('starting fetch')	
-			const suggestions = await fetchSuggestions(prompt)
+			const suggestions = await fetchSuggestions({
+				closeContext,
+				symbolImplementations,
+				llmContext: context.workspaceState.get<any>('llmContext', []),
+				webSearchenabled: context.workspaceState.get<any>('llmContextWebSearchEnabled', false),
+			});
 			console.log('fetched ' + suggestions)
 
 			if (!suggestions || suggestions.length == 0) {
@@ -192,32 +338,20 @@ ${impl}
 				return [];
 			}
 
-			const wordRange = document.getWordRangeAtPosition(position)
-
-			let replaceRange: vscode.Range;
-			let currentWordPrefix: string;
-
-			if (wordRange) {
-				replaceRange = new vscode.Range(wordRange.start, position)
-				currentWordPrefix = document.getText(replaceRange)
-			} else {
-				replaceRange = new vscode.Range(position, position)
-				currentWordPrefix = ''
-			}
-
-			return suggestions.map((suggestion, index) => {
-				const completion = new vscode.CompletionItem(currentWordPrefix + suggestion)
-				completion.insertText = new vscode.SnippetString(currentWordPrefix + suggestion)
-				completion.sortText = '\0' + index.toString().padStart(5, '0');
-				completion.documentation = new vscode.MarkdownString((index + 1).toString())
-				completion.range = replaceRange;
-				completion.kind = vscode.CompletionItemKind.Snippet;
-				return completion;
-			})
+			return suggestions.map((suggestion) => {
+				return new vscode.InlineCompletionItem(suggestion)
+			});
 		}
+	};
+
+	vscode.languages.registerInlineCompletionItemProvider({ language: 'python' }, provider);
+
+	const triggerCommand = vscode.commands.registerCommand('linecompletion.suggestFromContext', () => {
+		llmCompletionTriggered = true;
+		vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
 	});
 
-	context.subscriptions.push(suggestionProvider);
+	context.subscriptions.push(triggerCommand)
 }
 
 // TODO: typing
@@ -267,13 +401,11 @@ async function fetchSymbolLocations(path: string, start_line: number, end_line: 
 	}
 }
 
-async function fetchSuggestions(contextText: string): Promise<string[] | null> {
+async function fetchSuggestions(body: any): Promise<string[] | null> {
 	try {
 		const response = await fetch('http://127.0.0.1:7524/suggest', {
 			method: 'POST',
-			body: JSON.stringify({
-				context: contextText
-			}),
+			body: JSON.stringify(body),
 			headers: { 'Content-Type': 'application/json' }
 		});
 
@@ -285,39 +417,6 @@ async function fetchSuggestions(contextText: string): Promise<string[] | null> {
 
 		const data = await response.json();
 		return data.response;
-	} catch (err) {
-		console.error('Error contacting backend:', err);
-		return null;
-	}
-}
-
-async function fetchSuggestionsOllama(contextText: string): Promise<string[] | null> {
-	try {
-		const response = await fetch('http://192.168.178.36:11434/api/generate', {
-			method: 'POST',
-			body: JSON.stringify({
-				model: 'qwencodercustom',
-				prompt: contextText,
-				stream: false
-			}),
-			headers: { 'Content-Type': 'application/json' }
-		});
-
-		if (!response.ok) {
-			console.error('Backend returned error: ', response.status)
-			console.error(response.text)
-			return null;
-		}
-
-		const data = await response.json();
-		const promptResponse = data.response;
-
-		const md = new MarkdownIt();
-		const parsed = md.parse(promptResponse, {});
-		const codeBlocks = parsed
-			.filter(token => token.type === 'fence')
-			.map(token => token.content);
-		return codeBlocks;
 	} catch (err) {
 		console.error('Error contacting backend:', err);
 		return null;

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Context Manager</title>
+    <style>
+        :root {
+            --vscode-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            --vscode-editor-foreground: #cccccc;
+            --vscode-side-bar-background: #252526;
+            --vscode-button-background: #0e639c;
+            --vscode-button-foreground: #ffffff;
+            --vscode-button-hover-background: #1177bb;
+            --vscode-button-secondary-background: #5a5a5a;
+            --vscode-button-secondary-foreground: #cccccc;
+            --vscode-button-secondary-hover-background: #6a6a6a;
+            --vscode-editor-widget-border: #454545;
+            --vscode-description-foreground: #9d9d9d;
+            --vscode-input-background: #3c3c3c;
+            --vscode-input-foreground: #cccccc;
+            --vscode-focus-border: #007acc;
+            --vscode-icon-foreground: #cccccc;
+            --vscode-error-foreground: #f85149;
+            --vscode-editor-font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            --vscode-editor-font-size: 13px;
+            --vscode-success-foreground: #3fb950;
+        }
+
+        body {
+            font-family: var(--vscode-font-family);
+            color: var(--vscode-editor-foreground);
+            background-color: var(--vscode-side-bar-background);
+            margin: 0;
+            padding: 16px;
+            font-size: 13px;
+        }
+
+        .header {
+            margin-bottom: 20px;
+        }
+
+        .header h2 {
+            margin: 0 0 12px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--vscode-editor-foreground);
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .btn {
+            padding: 8px 12px;
+            border: 1px solid var(--vscode-button-background);
+            background-color: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: center;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            position: relative;
+        }
+
+        .btn:hover {
+            background-color: var(--vscode-button-hover-background);
+            transform: translateY(-1px);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background-color: var(--vscode-button-secondary-background);
+            color: var(--vscode-button-secondary-foreground);
+            border-color: var(--vscode-button-secondary-background);
+        }
+
+        .btn-secondary:hover {
+            background-color: var(--vscode-button-secondary-hover-background);
+        }
+
+        .btn-toggle {
+            background-color: var(--vscode-button-secondary-background);
+            color: var(--vscode-button-secondary-foreground);
+            border-color: var(--vscode-button-secondary-background);
+        }
+
+        .btn-toggle:hover {
+            background-color: var(--vscode-button-secondary-hover-background);
+        }
+
+        .btn-toggle.active {
+            background-color: #007acc;
+            color: #ffffff;
+            border-color: var(--vscode-success-foreground);
+        }
+
+        .btn-toggle.active:hover {
+            background-color: #74c9fe;
+        }
+
+        .toggle-indicator {
+            position: absolute;
+            top: -2px;
+            right: -2px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--vscode-success-foreground);
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+
+        .btn-toggle.active .toggle-indicator {
+            opacity: 1;
+        }
+
+        .clear-all-container {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--vscode-editor-widget-border);
+        }
+
+        .context-container {
+            background-color: rgba(255, 255, 255, 0.02);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .context-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--vscode-description-foreground);
+            font-size: 14px;
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 12px;
+            opacity: 0.3;
+        }
+
+        .context-item {
+            position: relative;
+            border-bottom: 1px solid var(--vscode-editor-widget-border);
+            transition: background-color 0.15s ease;
+        }
+
+        .context-item:last-child {
+            border-bottom: none;
+        }
+
+        .context-item:hover {
+            background-color: rgba(255, 255, 255, 0.03);
+        }
+
+        .item-content {
+            padding: 16px;
+            padding-right: 48px;
+            /* Space for delete button */
+        }
+
+        .item-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .item-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            color: white;
+            flex-shrink: 0;
+        }
+
+        .badge-file {
+            background: linear-gradient(135deg, #007acc, #005a9e);
+        }
+
+        .badge-url {
+            background: linear-gradient(135deg, #3f883f, #2d632d);
+        }
+
+        .badge-text {
+            background: linear-gradient(135deg, #c85022, #a03e19);
+        }
+
+        .item-source {
+            color: var(--vscode-description-foreground);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+            direction: rtl;
+            text-align: left;
+        }
+
+        .web-item-source {
+            color: var(--vscode-description-foreground);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .delete-btn {
+            position: absolute;
+            top: 50%;
+            right: 16px;
+            transform: translateY(-50%);
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: rgba(248, 81, 73, 0.1);
+            color: var(--vscode-error-foreground);
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            opacity: 0;
+            transition: all 0.15s ease;
+        }
+
+        .context-item:hover .delete-btn {
+            opacity: 1;
+        }
+
+        .delete-btn:hover {
+            background: rgba(248, 81, 73, 0.2);
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .editable-text {
+            width: 100%;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-editor-widget-border);
+            border-radius: 4px;
+            padding: 12px;
+            font-family: var(--vscode-editor-font-family);
+            font-size: var(--vscode-editor-font-size);
+            resize: vertical;
+            min-height: 80px;
+            box-sizing: border-box;
+            transition: border-color 0.15s ease;
+        }
+
+        .editable-text:focus {
+            outline: none;
+            border-color: var(--vscode-focus-border);
+            box-shadow: 0 0 0 1px var(--vscode-focus-border);
+        }
+
+        .editable-text::placeholder {
+            color: var(--vscode-description-foreground);
+            opacity: 0.7;
+        }
+
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background-color: rgba(255, 255, 255, 0.02);
+            border-top: 1px solid var(--vscode-editor-widget-border);
+            font-size: 12px;
+            color: var(--vscode-description-foreground);
+        }
+
+        .btn-icon::before {
+            content: '';
+            width: 14px;
+            height: 14px;
+            background-size: contain;
+            display: inline-block;
+        }
+
+        .icon-file::before {
+            content: '📁';
+        }
+
+        .icon-url::before {
+            content: '🌐';
+        }
+
+        .icon-text::before {
+            content: '📝';
+        }
+
+        .icon-search::before {
+            content: '🔍';
+        }
+
+        .icon-clear::before {
+            content: '🗑️';
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div class="controls">
+            <button class="btn icon-file" id="add-file-btn">
+                <span>File</span>
+            </button>
+            <button class="btn icon-url" id="add-url-btn">
+                <span>URL</span>
+            </button>
+            <button class="btn icon-text" id="add-text-btn">
+                <span>Text</span>
+            </button>
+            <button class="btn btn-toggle icon-search" id="web-search-toggle">
+                <span>Web Search</span>
+                <div class="toggle-indicator"></div>
+            </button>
+        </div>
+    </div>
+    <div class="context-container">
+        <ul class="context-list" id="context-list">
+        </ul>
+        <div class="stats">
+            <span>3 context items</span>
+            <span id="search-status">Web search: OFF</span>
+        </div>
+    </div>
+
+    <div class="clear-all-container">
+        <button class="btn btn-secondary icon-clear" id="clear-all-btn">
+            <span>Clear All Context</span>
+        </button>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        let webSearchEnabled = false;
+
+        function debounce(func, wait) {
+            let timeout;
+            return function (...args) {
+                const context = this;
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(context, args), wait);
+            };
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const addFileBtn = document.getElementById('add-file-btn');
+            const addUrlBtn = document.getElementById('add-url-btn');
+            const addTextBtn = document.getElementById('add-text-btn');
+            const webSearchToggle = document.getElementById('web-search-toggle');
+            const clearAllBtn = document.getElementById('clear-all-btn');
+            const contextList = document.getElementById('context-list');
+            const searchStatus = document.getElementById('search-status');
+
+            const debouncedUpdate = debounce((index, newContent) => {
+                vscode.postMessage({
+                    type: 'updateTextContext',
+                    index: index,
+                    context: newContent
+                });
+            }, 500);
+
+            addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
+            addUrlBtn.addEventListener('click', () => vscode.postMessage({ type: 'addUrl' }));
+            addTextBtn.addEventListener('click', () => vscode.postMessage({ type: 'addText' }));
+            clearAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'clearContext' }));
+
+            webSearchToggle.addEventListener('click', () => {
+                webSearchEnabled = !webSearchEnabled;
+                updateWebSearchUI();
+                vscode.postMessage({
+                    type: 'toggleWebSearch',
+                    enabled: webSearchEnabled
+                });
+            });
+
+            function updateWebSearchUI() {
+                if (webSearchEnabled) {
+                    webSearchToggle.classList.add('active');
+                    searchStatus.textContent = 'Web search: ON';
+                } else {
+                    webSearchToggle.classList.remove('active');
+                    searchStatus.textContent = 'Web search: OFF';
+                }
+            }
+
+            window.addEventListener('message', event => {
+                const message = event.data;
+                if (message.type === 'update') {
+                    updateContextList(message.context);
+                } else if (message.type === 'webSearchState') {
+                    webSearchEnabled = message.enabled;
+                    updateWebSearchUI();
+                }
+            });
+
+            function updateContextList(context) {
+                while (contextList.firstChild) {
+                    contextList.removeChild(contextList.firstChild);
+                }
+
+                if (context.length === 0) {
+                    const emptyDiv = document.createElement('div');
+                    emptyDiv.className = 'empty-state';
+                    emptyDiv.innerHTML = `
+                        <div class="icon">📋</div>
+                        <div>No context items yet</div>
+                        <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Add files, URLs, or text to get started</div>
+                    `;
+                    contextList.appendChild(emptyDiv);
+                    return;
+                }
+
+                context.forEach((item, index) => {
+                    const li = document.createElement('li');
+                    li.className = 'context-item';
+
+                    const contentDiv = document.createElement('div');
+                    contentDiv.className = 'item-content';
+
+                    if (item.type !== 'Text') {
+                        const headerDiv = document.createElement('div');
+                        headerDiv.className = 'item-header';
+
+                        const badge = document.createElement('span');
+                        badge.className = `item-badge badge-${item.type.toLowerCase()}`;
+                        badge.textContent = item.type;
+                        headerDiv.appendChild(badge);
+
+                        const sourceSpan = document.createElement('span');
+                        sourceSpan.className = item.type === 'File' ? 'item-source' : 'web-item-source';
+                        sourceSpan.textContent = item.context;
+                        sourceSpan.title = item.context;
+                        headerDiv.appendChild(sourceSpan);
+
+                        contentDiv.appendChild(headerDiv);
+                    }
+
+                    if (item.type === 'Text') {
+                        const textarea = document.createElement('textarea');
+                        textarea.className = 'editable-text';
+                        textarea.value = item.context;
+                        textarea.placeholder = "Enter your text context here...";
+
+                        textarea.addEventListener('input', () => {
+                            textarea.style.height = 'auto';
+                            textarea.style.height = (textarea.scrollHeight) + 'px';
+                            debouncedUpdate(index, textarea.value);
+                        });
+
+                        contentDiv.appendChild(textarea);
+
+                        setTimeout(() => {
+                            textarea.style.height = 'auto';
+                            textarea.style.height = (textarea.scrollHeight) + 'px';
+                        }, 0);
+                    }
+
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'delete-btn';
+                    deleteBtn.innerHTML = '×';
+                    deleteBtn.title = 'Remove item';
+                    deleteBtn.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'removeContext', index: index });
+                    });
+
+                    li.appendChild(contentDiv);
+                    li.appendChild(deleteBtn);
+                    contextList.appendChild(li);
+                });
+
+                updateStats(context.length);
+            }
+
+            function updateStats(count) {
+                const statsDiv = document.querySelector('.stats');
+                if (statsDiv) {
+                    const countSpan = statsDiv.querySelector('span:first-child');
+                    countSpan.textContent = `${count} context item${count !== 1 ? 's' : ''}`;
+                }
+            }
+
+            const deleteButtons = document.querySelectorAll('.delete-btn');
+            deleteButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.target.closest('.context-item').remove();
+                    const remaining = document.querySelectorAll('.context-item').length;
+                    updateStats(remaining);
+                });
+            });
+
+            vscode.postMessage({ type: 'requestUpdate' });
+
+            updateWebSearchUI();
+        });
+    </script>
+</body>
+
+</html>

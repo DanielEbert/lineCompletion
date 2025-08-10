@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <!-- stacked context layers (left) -->
+  <rect x="1.5" y="4" width="7.5" height="2" rx="0.5" stroke="white" stroke-width="1.4" fill="none"/>
+  <rect x="1.5" y="7.2" width="7.5" height="2" rx="0.5" stroke="white" stroke-width="1.4" fill="none" />
+  <rect x="1.5" y="10.4" width="7.5" height="2" rx="0.5" stroke="white" stroke-width="1.4" fill="none" />
+
+  <!-- file outline with folded corner (right) -->
+  <path d="M11.5 3.5h5.5l3 3v12a1 1 0 0 1-1 1H11.5a1 1 0 0 1-1-1v-15a1 1 0 0 1 1-1z" stroke="white" stroke-width="1.4" stroke-linejoin="round" fill="none"/>
+
+  <!-- folded corner detail -->
+  <path d="M17 3.5v4h4" stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- curly braces inside file (representing code / completion) -->
+  <path d="M13.2 9.5c-.6-.2-1-1-1-1.9 0-1 .5-1.6 1.2-1.9" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M15.8 9.5c.6-.2 1-1 1-1.9 0-1-.5-1.6-1.2-1.9" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- small connecting dot (idea / LLM hint) -->
+  <circle cx="18.2" cy="14.6" r="0.6" fill="white" />
+</svg>
+
