@@ -67,6 +67,7 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
+    "ignore": "^7.0.5",
     "markdown-it": "^14.1.0",
     "node-fetch": "^2.7.0"
   }

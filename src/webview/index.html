@@ -132,12 +132,24 @@
             margin-top: 16px;
             padding-top: 16px;
             border-top: 1px solid var(--vscode-editor-widget-border);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .copy-all-full {
+            width: 100%;
+            height: calc(1.5 * 32px);
+            font-size: 1.2em;
+        }
+
+        .clear-all-full {
+            width: 100%;
         }
 
         .context-container {
             background-color: rgba(255, 255, 255, 0.02);
             border-radius: 6px;
-            overflow: hidden;
         }
 
         .context-list {
@@ -171,6 +183,17 @@
 
         .context-item:hover {
             background-color: rgba(255, 255, 255, 0.03);
+
+            .context-item:first-child {
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+            }
+
+            .context-item:last-child {
+                border-bottom-left-radius: 6px;
+                border-bottom-right-radius: 6px;
+                border-bottom: none;
+            }
         }
 
         .item-content {
@@ -328,6 +351,10 @@
             content: '🗑️';
         }
 
+        .icon-copy::before {
+            content: '📋';
+        }
+
         .suggestion-wrapper {
             position: relative;
         }
@@ -363,6 +390,105 @@
             background-color: var(--vscode-focus-border);
             color: var(--vscode-button-foreground);
         }
+
+        .project-tree-container {
+            background-color: rgba(255, 255, 255, 0.02);
+            border-radius: 6px;
+            overflow-y: auto;
+            max-height: 400px;
+            border: 1px solid var(--vscode-editor-widget-border);
+            padding: 8px;
+        }
+
+        .tree-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        /* Make indentation work by adding padding to nested lists.
+   This is the key to making it look like a tree. */
+        .tree-item .tree-list {
+            padding-left: 24px;
+        }
+
+        .tree-item-content {
+            display: flex;
+            align-items: center;
+            padding: 4px;
+            cursor: pointer;
+            border-radius: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tree-item-content:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .tree-item-content label {
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            flex-grow: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tree-item-content input[type="checkbox"] {
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .tree-item-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Add file/folder icons before the name for proper alignment */
+        .tree-item-name::before {
+            margin-right: 6px;
+            font-family: var(--vscode-font-family);
+        }
+
+        .tree-item.folder .tree-item-name::before {
+            content: '📁';
+        }
+
+        .tree-item.file .tree-item-name::before {
+            content: '📄';
+        }
+
+        .tree-icon {
+            margin-right: 6px;
+            width: 10px;
+            /* Adjusted width */
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        /* Chevron for FOLDERS only */
+        .tree-item.folder>.tree-item-content .tree-icon::before {
+            content: '▶';
+            display: inline-block;
+            transition: transform 0.15s ease-in-out;
+            font-size: 10px;
+        }
+
+        .tree-item.folder.open>.tree-item-content .tree-icon::before {
+            transform: rotate(90deg);
+        }
+
+        /* The misaligned ::after rules are now removed */
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-item.open>.tree-children {
+            display: block;
+        }
     </style>
 </head>
 
@@ -384,6 +510,16 @@
             </button>
         </div>
     </div>
+    <div class="header" style="margin-top: 20px;">
+        <h2>Project Files</h2>
+    </div>
+    <div id="project-tree-container" class="project-tree-container">
+        <p class="empty-state">Loading project files...</p>
+    </div>
+
+    <div class="header" style="margin-top: 20px;">
+        <h2>Context Items</h2>
+    </div>
     <div class="context-container">
         <ul class="context-list" id="context-list">
         </ul>
@@ -394,18 +530,27 @@
     </div>
 
     <div class="clear-all-container">
-        <button class="btn btn-secondary icon-clear" id="clear-all-btn">
-            <span>Clear All Context</span>
+        <button class="btn btn-secondary icon-copy copy-all-full" id="copy-all-btn">
+            <span>Copy All</span>
+        </button>
+        <button class="btn btn-secondary icon-clear clear-all-full" id="clear-all-btn">
+            <span>Clear All</span>
         </button>
     </div>
 
     <script>
         const vscode = acquireVsCodeApi();
+        window.workspaceRoot = '__WORKSPACE_ROOT__';
 
         let webSearchEnabled = false;
         const suggestionState = {
             suggestions: [],
             selectedIndex: -1,
+        };
+
+        let focusState = {
+            index: null,
+            cursor: null
         };
 
         function debounce(func, wait) {
@@ -524,21 +669,33 @@
             const cursorPosition = textarea.selectionStart;
             const atIndex = value.lastIndexOf('@', cursorPosition - 1);
 
-            if (atIndex !== -1) {
-                const newValue = value.substring(0, atIndex + 1) + filePath + ' ' + value.substring(cursorPosition);
-                textarea.value = newValue;
-                textarea.focus();
-                const newCursorPos = atIndex + filePath.length + 2;
-                textarea.setSelectionRange(newCursorPos, newCursorPos);
+            if (atIndex === -1) return;
 
-                hideSuggestions(index);
-                debouncedUpdate(index, textarea.value);
-                // Trigger resize
-                textarea.dispatchEvent(new Event('input', { bubbles: true }));
+
+            const textBefore = value.substring(0, atIndex);
+            const textAfter = value.substring(cursorPosition);
+            const newTextContent = `${textBefore}@${filePath} ${textAfter}`;
+            const newCursorPos = (textBefore + '@' + filePath + ' ').length;
+
+            textarea.value = newTextContent;
+            hideSuggestions(index);
+
+            focusState = {
+                index: index,
+                cursor: newCursorPos
             }
+
+            vscode.postMessage({
+                type: 'updateTextContext',
+                index: index,
+                context: newTextContent
+            });
+
+            const fullPath = window.workspaceRoot + '/' + filePath;
+            vscode.postMessage({ type: 'addFileToContext', filePath: fullPath });
         }
 
-        function updateContextList(context) {
+        function renderContextList(context) {
             const contextList = document.getElementById('context-list');
             while (contextList.firstChild) {
                 contextList.removeChild(contextList.firstChild);
@@ -617,6 +774,15 @@
             updateStats(context.length);
         }
 
+        // Redefine updateContextList to call both renderContextList and sync the tree
+        let updateContextList = (context) => {
+            renderContextList(context);
+            currentFileContextPaths = new Set(
+                context.filter(item => item.type === 'File').map(item => item.context)
+            );
+            syncTreeCheckboxes();
+        }
+
         function updateStats(count) {
             const statsDiv = document.querySelector('.stats');
             if (statsDiv) {
@@ -625,17 +791,124 @@
             }
         }
 
+        let currentFileContextPaths = new Set();
+
+        function renderTreeView(tree) {
+            const ul = document.createElement('ul');
+            ul.className = 'tree-list';
+
+            tree.forEach(node => {
+                const li = document.createElement('li');
+                li.className = `tree-item ${node.type}`;
+                li.dataset.path = node.path;
+
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'tree-item-content';
+
+                const label = document.createElement('label');
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.dataset.path = node.path;
+
+                const iconSpan = document.createElement('span');
+                iconSpan.className = 'tree-icon';
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'tree-item-name';
+                nameSpan.textContent = node.name;
+                nameSpan.title = node.name;
+
+                label.appendChild(checkbox);
+                label.appendChild(iconSpan);
+                label.appendChild(nameSpan);
+                contentDiv.appendChild(label);
+                li.appendChild(contentDiv);
+
+                if (node.type === 'file') {
+                    checkbox.checked = currentFileContextPaths.has(node.path);
+                }
+
+                if (node.type === 'folder') {
+                    contentDiv.addEventListener('click', (e) => {
+                        if (e.target.type !== 'checkbox') {
+                            e.preventDefault();
+                            li.classList.toggle('open');
+                        }
+                    });
+
+                    if (node.children && node.children.length > 0) {
+                        const childrenUl = renderTreeView(node.children);
+                        childrenUl.classList.add('tree-children');
+                        li.appendChild(childrenUl);
+                    }
+                }
+                ul.appendChild(li);
+            });
+
+            return ul;
+        }
+
+        function handleTreeCheckboxChange(e) {
+            const checkbox = e.target;
+            if (checkbox.tagName !== 'INPUT' || checkbox.type !== 'checkbox') return;
+
+            const li = checkbox.closest('.tree-item');
+            const isChecked = checkbox.checked;
+
+            const filesToUpdate = [];
+
+            // Recursively find all file checkboxes within a folder
+            const collectFiles = (element) => {
+                const childCheckboxes = element.querySelectorAll('.tree-item.file input[type="checkbox"]');
+                childCheckboxes.forEach(cb => filesToUpdate.push({ path: cb.dataset.path, checked: isChecked }));
+            };
+
+            if (li.classList.contains('folder')) {
+                // Collect all child files and check/uncheck them
+                const childCheckboxes = li.querySelectorAll('input[type="checkbox"]');
+                childCheckboxes.forEach(cb => cb.checked = isChecked);
+                collectFiles(li);
+            } else {
+                filesToUpdate.push({ path: li.dataset.path, checked: isChecked });
+            }
+
+            // Send messages to the extension for each file
+            filesToUpdate.forEach(file => {
+                if (file.checked) {
+                    vscode.postMessage({ type: 'addFileToContext', filePath: file.path });
+                } else {
+                    vscode.postMessage({ type: 'removeFileFromContext', filePath: file.path });
+                }
+            });
+        }
+
+        function syncTreeCheckboxes() {
+            const allCheckboxes = document.querySelectorAll('#project-tree-container input[type="checkbox"]');
+            allCheckboxes.forEach(cb => {
+                const path = cb.dataset.path;
+                if (path) {
+                    cb.checked = currentFileContextPaths.has(path);
+                }
+            });
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const addFileBtn = document.getElementById('add-file-btn');
             const addUrlBtn = document.getElementById('add-url-btn');
             const addTextBtn = document.getElementById('add-text-btn');
             const webSearchToggle = document.getElementById('web-search-toggle');
             const clearAllBtn = document.getElementById('clear-all-btn');
+            const copyAllBtn = document.getElementById('copy-all-btn');
+            const projectTreeContainer = document.getElementById('project-tree-container');
 
             addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
             addUrlBtn.addEventListener('click', () => vscode.postMessage({ type: 'addUrl' }));
             addTextBtn.addEventListener('click', () => vscode.postMessage({ type: 'addText' }));
             clearAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'clearContext' }));
+            copyAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'copyAllContext' }));
+
+            // Project tree event listener
+            projectTreeContainer.addEventListener('change', handleTreeCheckboxChange);
 
             webSearchToggle.addEventListener('click', () => {
                 webSearchEnabled = !webSearchEnabled;
@@ -682,10 +955,19 @@
                             }
                             break;
                         }
+                    case 'workspaceTree': {
+                        const tree = message.tree;
+                        const treeElement = renderTreeView(tree, projectTreeContainer);
+                        projectTreeContainer.innerHTML = '';
+                        projectTreeContainer.appendChild(treeElement);
+                        syncTreeCheckboxes();
+                        break;
+                    }
                 }
             });
 
             vscode.postMessage({ type: 'requestUpdate' });
+            vscode.postMessage({ type: 'getWorkspaceTree' });
             updateWebSearchUI();
         });
     </script>

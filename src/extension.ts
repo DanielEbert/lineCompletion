@@ -1,24 +1,30 @@
 import * as vscode from 'vscode';
 import fetch from 'node-fetch'
 import * as fs from 'fs';
+import ignore from 'ignore';
+import path from 'path';
 
 
 export function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-        text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
+	let text = '';
+	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	for (let i = 0; i < 32; i++) {
+		text += possible.charAt(Math.floor(Math.random() * possible.length));
+	}
+	return text;
 }
 
-// TODO: could be stored in extension memory
+interface TreeNode {
+	type: 'file' | 'folder';
+	path: string;
+	children: { [key: string]: TreeNode };
+}
 
 export class ContextViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'llmContextView';
 	private _view?: vscode.WebviewView;
 
-	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) {}
+	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) { }
 
 	public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext, token: vscode.CancellationToken): Thenable<void> | void {
 		this._view = webviewView;
@@ -28,96 +34,227 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'src', 'webview')]
 		}
 
-		webviewView.webview.html = this._getHtmlForWebview(webviewView.webview)
+		webviewView.webview.html = this._getHtml()
 
 		webviewView.webview.onDidReceiveMessage(async (data) => {
 			const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
 
-switch(data.type) {
-case 'addFile': {
-const fileUri = await vscode.window.showOpenDialog({canSelectMany: false});
-if (fileUri && fileUri.length > 0) {
-// backend can also fetch
-const newContext = [...currentContext, {type: 'File', context: fileUri[0].fsPath}]
-await this._context.workspaceState.update('llmContext', newContext);
-this.updateView();
-}
-break;
-}
-case 'addUrl': {
-const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
-if (url && url.length > 0) {
-// TODO: on backend we want to fetch and summarize/parse website
-const newContext = [...currentContext, {type: 'Url', context: url}]
-await this._context.workspaceState.update('llmContext', newContext);
-this.updateView();
-}
-break;
-}
-case 'addText': {
-// Adding text now defaults to an empty string, allowing inline editing.
-const newContext = [...currentContext, {type: 'Text', context: ""}]
-await this._context.workspaceState.update('llmContext', newContext);
-this.updateView();
-break;
-}
-case 'getLocalFiles': {
-if (!data.query || data.query.length < 1) {
-this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: [], index: data.index });
-break;
-}
-// Use findFiles - it's async so we need await.
-// We exclude node_modules and limit results to 50 for performance.
-const files = await vscode.workspace.findFiles(`**/*${data.query}*`, '**/node_modules/**', 50);
-const suggestions = files.map(file => vscode.workspace.asRelativePath(file.path));
+			switch (data.type) {
+				case 'getWorkspaceTree': {
+					const tree = await this._getWorkspaceTree();
+					this._view?.webview.postMessage({ type: 'workspaceTree', tree });
+					break;
+				}
+				case 'addFileToContext': {
+					if (data.filePath && !currentContext.some(item => item.type === 'File' && item.context === data.filePath)) {
+						console.log('data.filePath', data.filePath)
+						const newContext = [...currentContext, { type: 'File', context: data.filePath }];
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'removeFileFromContext': {
+					if (data.filePath) {
+						const newContext = currentContext.filter(item => !(item.type === 'File' && item.context === data.filePath));
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'addFile': {
+					const fileUri = await vscode.window.showOpenDialog({ canSelectMany: false });
+					if (fileUri && fileUri.length > 0) {
+						// backend can also fetch
+						const newContext = [...currentContext, { type: 'File', context: fileUri[0].fsPath }]
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'addUrl': {
+					const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
+					if (url && url.length > 0) {
+						// TODO: on backend we want to fetch and summarize/parse website
+						const newContext = [...currentContext, { type: 'Url', context: url }]
+						await this._context.workspaceState.update('llmContext', newContext);
+						this.updateView();
+					}
+					break;
+				}
+				case 'addText': {
+					// Adding text now defaults to an empty string, allowing inline editing.
+					const newContext = [...currentContext, { type: 'Text', context: "" }]
+					await this._context.workspaceState.update('llmContext', newContext);
+					this.updateView();
+					break;
+				}
+				case 'getLocalFiles': {
+					if (!data.query || data.query.length < 1) {
+						this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: [], index: data.index });
+						break;
+					}
+					// Use findFiles - it's async so we need await.
+					// We exclude node_modules and limit results to 50 for performance.
+					const files = await vscode.workspace.findFiles(`**/*${data.query}*`, '**/node_modules/**', 50);
+					const suggestions = files.map(file => vscode.workspace.asRelativePath(file.path));
 
-this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
-break;
-}
-case 'updateTextContext': {
-if (data.index >= 0 && data.index < currentContext.length) {
-const newContext = [...currentContext];
-newContext[data.index].context = data.context;
-await this._context.workspaceState.update('llmContext', newContext);
-}
-break;
-}
-case 'removeContext': {
-                    const newContext = currentContext.filter((_, index) => index !== data.index);
-                    await this._context.workspaceState.update('llmContext', newContext);
-                    this.updateView();
-                    break;
-                }
-                case 'clearContext': {
-                     await this._context.workspaceState.update('llmContext', []);
-                     this.updateView();
-                     break;
-                }
-                case 'requestUpdate': {
-                    this.updateView();
-                    break;
-                }
-case 'toggleWebSearch': {
-await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
-}
-}
+					this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
+					break;
+				}
+				case 'updateTextContext': {
+					if (data.index >= 0 && data.index < currentContext.length) {
+						const newContext = [...currentContext];
+						newContext[data.index].context = data.context;
+						await this._context.workspaceState.update('llmContext', newContext);
+					}
+					break;
+				}
+				case 'removeContext': {
+					const newContext = currentContext.filter((_, index) => index !== data.index);
+					await this._context.workspaceState.update('llmContext', newContext);
+					this.updateView();
+					break;
+				}
+				case 'clearContext': {
+					await this._context.workspaceState.update('llmContext', []);
+					this.updateView();
+					break;
+				}
+				case 'copyAllContext': {
+					this.copyAllContextToClipboard();
+					break;
+				}
+				case 'requestUpdate': {
+					this.updateView();
+					break;
+				}
+				case 'toggleWebSearch': {
+					await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
+				}
+			}
 		})
 	}
 
 	public updateView() {
 		if (!this._view) return;
 		const context = this._context.workspaceState.get('llmContext', [])
-		this._view.webview.postMessage({type: 'update', context})
+		this._view.webview.postMessage({ type: 'update', context })
 		this._view.badge = {
 			value: context.length,
 			tooltip: `${context.length} context items`
 		}
 	}
 
-	private _getHtmlForWebview(webview: vscode.Webview) {
+	private async copyAllContextToClipboard() {
+		const context = this._context.workspaceState.get<any[]>('llmContext', []);
+		if (context.length === 0) {
+			vscode.window.showInformationMessage("No context to copy.");
+			return;
+		}
+
+		const formattedContext = context.map(item => {
+			let header = `--- ${item.type.toUpperCase()} CONTEXT ---`;
+			let content = item.context;
+
+			if (item.type === 'File') {
+				// For files, we could read the content, but for now, we'll just use the path.
+				// This matches the current behavior where the backend handles file reading.
+				content = `Path: ${item.context}`;
+			} else if (item.type === 'Url') {
+				content = `URL: ${item.context}`;
+			}
+
+			return `${header}\n${content}`;
+		}).join('\n\n');
+
+		await vscode.env.clipboard.writeText(formattedContext);
+		vscode.window.showInformationMessage("All context items copied to clipboard!");
+	}
+
+	private async findWorkspaceFiles() {
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders || workspaceFolders.length === 0) {
+			return [];
+		}
+
+		const workspaceRoot = workspaceFolders[0].uri.fsPath;
+		const gitignorePath = path.join(workspaceRoot, '.gitignore');
+
+		if (fs.existsSync(gitignorePath)) {
+			// Load and parse .gitignore
+			const ig = ignore();
+			ig.add(fs.readFileSync(gitignorePath, 'utf8'));
+
+			// Find all files and filter via .gitignore
+			const allFiles = await vscode.workspace.findFiles('**/*', null);
+			return allFiles.filter(uri => !ig.ignores(path.relative(workspaceRoot, uri.fsPath)));
+		} else {
+			// Fall back to hardcoded exclude
+			return vscode.workspace.findFiles('**/*', '{**/node_modules/**,**/.git/**,**/venv/**}');
+		}
+	}
+
+	private async _getWorkspaceTree() {
+		const files = await this.findWorkspaceFiles();
+		const tree = {};
+
+		const insertIntoTree = (parts: string[], filePath: string): void => {
+			let currentLevel: { [key: string]: TreeNode } = tree;
+			for (let i = 0; i < parts.length; i++) {
+				const part = parts[i];
+				const isFile = i === parts.length - 1;
+				if (!currentLevel[part]) {
+					currentLevel[part] = {
+						type: isFile ? 'file' : 'folder',
+						path: isFile ? filePath : '',
+						children: {}
+					};
+				}
+				currentLevel = currentLevel[part].children;
+			}
+		};
+
+		files.forEach(file => {
+			const relativePath = vscode.workspace.asRelativePath(file.fsPath);
+			const parts = relativePath.split('/');
+			insertIntoTree(parts, file.fsPath);
+		});
+
+		const convertTreeToArray = (node: { [key: string]: TreeNode }): Array<{ name: string; type: string; path: string; children: any[] }> => {
+			return Object.entries(node).map(([name, value]) => {
+				const child = value as TreeNode;
+				return {
+					name,
+					type: child.type,
+					path: child.path,
+					children: convertTreeToArray(child.children)
+				};
+			}).sort((a, b) => {
+				if (a.type === b.type) {
+					return a.name.localeCompare(b.name);
+				}
+				return a.type === 'folder' ? -1 : 1;
+			});
+		};
+
+		return convertTreeToArray(tree);
+	}
+
+	private _getHtml() {
 		const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'index.html');
-		return fs.readFileSync(htmlPath.fsPath, 'utf8');
-	}	
+		let htmlContent = fs.readFileSync(htmlPath.fsPath, 'utf8');
+
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		const workspaceRoot = (workspaceFolders && workspaceFolders.length > 0)
+			? workspaceFolders[0].uri.fsPath
+			: '';
+
+		// Escape backslashes for Windows paths to be correctly interpreted as a string literal in JavaScript
+		const escapedWorkspaceRoot = workspaceRoot.replace(/\\/g, '\\\\');
+
+		return htmlContent.replace('\'__WORKSPACE_ROOT__\'', `'${escapedWorkspaceRoot}'`);
+	}
 }
 
 /**
@@ -148,7 +285,7 @@ function insertAtPosition(text: string, insertLine: number, insertChar: number, 
 	if (insertChar > line.length) {
 		line += ' '.repeat(insertChar - line.length);
 	}
-	const newLine =	line.slice(0, insertChar) + insertText + line.slice(insertChar);
+	const newLine = line.slice(0, insertChar) + insertText + line.slice(insertChar);
 	lines[insertLine] = newLine;
 
 	return lines.join('\n');
@@ -183,7 +320,7 @@ async function getSymbolLocations(symbolLocations: any, document: vscode.TextDoc
 				position,
 				ctsImplementations.token
 			)
-			.then(locations => locations || [])
+				.then(locations => locations || [])
 		} catch (error) {
 			if (error instanceof vscode.CancellationError) {
 				console.log(`Implementation search for '${symbol.name}' was cancelled.`);
@@ -207,7 +344,7 @@ async function getSymbolLocations(symbolLocations: any, document: vscode.TextDoc
 	}
 
 	const symbolImplementationLocations = [];
-	for(let i = 0; i < symbolLocations.length; i++) {
+	for (let i = 0; i < symbolLocations.length; i++) {
 		if (nestedLocations[i].length < 1) continue;
 		const name = symbolLocations[i][0];
 		const location = nestedLocations[i][0];
@@ -241,7 +378,7 @@ export function activate(context: vscode.ExtensionContext) {
 		async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, completionContext: vscode.InlineCompletionContext, token: vscode.CancellationToken) {
 			if (!llmCompletionTriggered) {
 				return;
-			}	
+			}
 			llmCompletionTriggered = false;
 
 			let contextLine = position.line;
@@ -264,7 +401,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 			let startLine: number;
 			let endLine: number;
-			
+
 			if (enclosingFunctionSymbol) {
 				startLine = enclosingFunctionSymbol.range.start.line;
 				endLine = Math.max(enclosingFunctionSymbol.range.end.line, position.line + 1);
@@ -325,16 +462,16 @@ export function activate(context: vscode.ExtensionContext) {
 
 			// symbolImplementations.unshift({text: closeContext})
 
-// 			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
-// 				return `\`\`\`python
-// ${impl.text}
-// \`\`\``;
-// 			});
+			// 			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
+			// 				return `\`\`\`python
+			// ${impl.text}
+			// \`\`\``;
+			// 			});
 
 			// const prompt = wrappedSymbolImplementations.join('\n\n')
 			// console.log(prompt)
 
-			console.log('starting fetch')	
+			console.log('starting fetch')
 			const suggestions = await fetchSuggestions({
 				closeContext,
 				symbolImplementations,
