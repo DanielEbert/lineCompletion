@@ -65,10 +65,14 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 				case 'addFile': {
 					const fileUri = await vscode.window.showOpenDialog({ canSelectMany: false });
 					if (fileUri && fileUri.length > 0) {
-						// backend can also fetch
-						const newContext = [...currentContext, { type: 'File', context: fileUri[0].fsPath }]
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
+						const workspaceFolders = vscode.workspace.workspaceFolders;
+						if (workspaceFolders) {
+							const workspaceRoot = workspaceFolders[0].uri.fsPath;
+							const relativePath = path.relative(workspaceRoot, fileUri[0].fsPath);
+							const newContext = [...currentContext, { type: 'File', context: relativePath }]
+							await this._context.workspaceState.update('llmContext', newContext);
+							this.updateView();
+						}
 					}
 					break;
 				}
@@ -89,6 +93,20 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					this.updateView();
 					break;
 				}
+				case 'setMainContext': {
+					const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
+
+					// If the clicked index is the current main index, we toggle it off by setting the index to -1.
+					// Otherwise, we set the clicked index as the new main index.
+					const newIndex = mainIndex === data.index ? -1 : data.index;
+
+					// We only allow 'Text' items to be set as main. Unsetting (when newIndex is -1) is always allowed.
+					if (newIndex === -1 || currentContext[newIndex]?.type === 'Text') {
+						await this._context.workspaceState.update('llmMainContextIndex', newIndex);
+						this.updateView();
+					}
+					break;
+				}
 				case 'getLocalFiles': {
 					if (!data.query || data.query.length < 1) {
 						this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: [], index: data.index });
@@ -97,9 +115,12 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					// Use findFiles - it's async so we need await.
 					// We exclude node_modules and limit results to 50 for performance.
 					const files = await vscode.workspace.findFiles(`**/*${data.query}*`, '**/node_modules/**', 50);
-					const suggestions = files.map(file => vscode.workspace.asRelativePath(file.path));
-
-					this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
+					const workspaceFolders = vscode.workspace.workspaceFolders;
+					if (workspaceFolders) {
+						const workspaceRoot = workspaceFolders[0].uri.fsPath;
+						const suggestions = files.map(file => path.relative(workspaceRoot, file.path));
+						this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
+					}
 					break;
 				}
 				case 'updateTextContext': {
@@ -111,13 +132,22 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 				case 'removeContext': {
+					const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
 					const newContext = currentContext.filter((_, index) => index !== data.index);
+
+					if (data.index === mainIndex) {
+						await this._context.workspaceState.update('llmMainContextIndex', -1);
+					} else if (data.index < mainIndex) {
+						await this._context.workspaceState.update('llmMainContextIndex', mainIndex - 1);
+					}
+
 					await this._context.workspaceState.update('llmContext', newContext);
 					this.updateView();
 					break;
 				}
 				case 'clearContext': {
 					await this._context.workspaceState.update('llmContext', []);
+					await this._context.workspaceState.update('llmMainContextIndex', -1);
 					this.updateView();
 					break;
 				}
@@ -138,35 +168,59 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
 	public updateView() {
 		if (!this._view) return;
-		const context = this._context.workspaceState.get('llmContext', [])
-		this._view.webview.postMessage({ type: 'update', context })
+		const context = this._context.workspaceState.get('llmContext', []);
+		const mainContextIndex = this._context.workspaceState.get('llmMainContextIndex', -1);
+		this._view.webview.postMessage({ type: 'update', context, mainContextIndex });
 		this._view.badge = {
 			value: context.length,
 			tooltip: `${context.length} context items`
-		}
+		};
 	}
 
 	private async copyAllContextToClipboard() {
-		const context = this._context.workspaceState.get<any[]>('llmContext', []);
-		if (context.length === 0) {
+		const llmContext = this._context.workspaceState.get<any[]>('llmContext', []);
+		const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
+
+		if (llmContext.length === 0) {
 			vscode.window.showInformationMessage("No context to copy.");
 			return;
 		}
 
-		const formattedContext = context.map(item => {
-			let header = `--- ${item.type.toUpperCase()} CONTEXT ---`;
-			let content = item.context;
+		let mainText: string | null = null;
+		const supplementaryText: string[] = []
+		const urls: string[] = []
+		const filepaths: string[] = []
 
-			if (item.type === 'File') {
-				// For files, we could read the content, but for now, we'll just use the path.
-				// This matches the current behavior where the backend handles file reading.
-				content = `Path: ${item.context}`;
-			} else if (item.type === 'Url') {
-				content = `URL: ${item.context}`;
+		console.log(llmContext)
+
+		llmContext.forEach((item, index) => {
+			console.log(item.type === 'File' + ' ' + item.type)
+			if (index === mainIndex) {
+				mainText = item.context;
+				return;
 			}
 
-			return `${header}\n${content}`;
-		}).join('\n\n');
+			if (item.type === 'Text') {
+				supplementaryText.push(item.context)
+			} else if (item.type === 'File') {
+				console.log(item.type)
+				filepaths.push(item.context);
+			} else if (item.type === 'Url') {
+				urls.push(item.context)
+			}
+		});
+
+		console.log(filepaths)
+
+		const formattedContext = await fetchContext({
+			main_text: mainText,
+			supplementary_text: supplementaryText,
+			urls,
+			filepaths,
+			symbol_implementations: [],
+			web_search_enabled: this._context.workspaceState.get<any>('llmContextWebSearchEnabled', false)
+		});
+		if (formattedContext == null) return;  // log called in fetchContext
 
 		await vscode.env.clipboard.writeText(formattedContext);
 		vscode.window.showInformationMessage("All context items copied to clipboard!");
@@ -215,10 +269,13 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			}
 		};
 
+		const workspaceRoot = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+		if (!workspaceRoot) return [];
+
 		files.forEach(file => {
-			const relativePath = vscode.workspace.asRelativePath(file.fsPath);
+			const relativePath = path.relative(workspaceRoot, file.fsPath).replace(/\\/g, "/");
 			const parts = relativePath.split('/');
-			insertIntoTree(parts, file.fsPath);
+			insertIntoTree(parts, relativePath);
 		});
 
 		const convertTreeToArray = (node: { [key: string]: TreeNode }): Array<{ name: string; type: string; path: string; children: any[] }> => {
@@ -244,16 +301,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 	private _getHtml() {
 		const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'index.html');
 		let htmlContent = fs.readFileSync(htmlPath.fsPath, 'utf8');
-
-		const workspaceFolders = vscode.workspace.workspaceFolders;
-		const workspaceRoot = (workspaceFolders && workspaceFolders.length > 0)
-			? workspaceFolders[0].uri.fsPath
-			: '';
-
-		// Escape backslashes for Windows paths to be correctly interpreted as a string literal in JavaScript
-		const escapedWorkspaceRoot = workspaceRoot.replace(/\\/g, '\\\\');
-
-		return htmlContent.replace('\'__WORKSPACE_ROOT__\'', `'${escapedWorkspaceRoot}'`);
+		return htmlContent;
 	}
 }
 
@@ -499,6 +547,27 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(triggerCommand)
+}
+
+async function fetchContext(context: any): Promise<string | null> {
+	try {
+		const response = await fetch('http://127.0.0.1:7524/context', {
+			method: 'POST',
+			body: JSON.stringify(context),
+			headers: { 'Content-Type': 'application/json' }
+		});
+
+		if (!response.ok) {
+			console.error('Backend returned error: ', response.status)
+			console.error(response.text)
+			return null;
+		}
+
+		return await response.json();
+	} catch (err) {
+		console.error('Error contacting backend:', err);
+		return null;
+	}
 }
 
 // TODO: typing

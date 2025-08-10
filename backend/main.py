@@ -11,6 +11,16 @@ import inspect
 import builtins
 from exa_py import Exa
 from enum import Enum
+import requests
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from bs4 import BeautifulSoup
+import re
+import copy
+
+from .openai_search import get_url_content_as_string
+
+# Suppress insecure request warnings
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 
 PY_LANG = tree_sitter.Language(tsp.language())
@@ -54,11 +64,15 @@ class LLMContextEntry(BaseModel):
     type: LLMContextType
     context: str
 
-class ContextText(BaseModel):
-    closeContext: str
-    symbolImplementations: list[str]
-    llmContext: list[LLMContextEntry]
-    webSearchenabled: bool
+class Context(BaseModel):
+    main_text: str | None = None
+    supplementary_text: list[str] = []
+    urls: list[str] = []
+    filepaths: list[str] = []
+
+    # TODO
+    symbol_implementations: list[str]
+    web_search_enabled: bool
 
 
 class ContextLocation(BaseModel):
@@ -660,7 +674,7 @@ def generate(context: str):
 
 
 @app.post('/suggest')
-async def suggest(contextText: ContextText):
+async def suggest(contextText: Context):
     print('on /suggest')
     if contextText.webSearchenabled:
         search_results = search(contextText.context)
@@ -758,6 +772,49 @@ async def symbol_source(symbol_locations: list[SymbolLocation]):
         })
     
     return ret
+
+
+def make_section(tag: str, title: str, content: str) -> str:
+    return f'''\
+# [{tag} Start] - {title}
+
+{content}
+
+# [{tag} End] - {title}
+'''
+
+
+@app.post('/context')
+async def get_context(context: Context):
+    sections = []
+
+    if context.main_text:
+        sections.append(make_section("TASK", "Main Content", context.main_text))
+
+    if context.supplementary_text:
+        combined_supplementary = "\n\n---\n\n".join(context.supplementary_text)
+        sections.append(make_section("CONTEXT", "Additional Information", combined_supplementary))
+
+    for filepath in context.filepaths:
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                filecontent = f.read()
+            sections.append(make_section("FILE", filepath, filecontent))
+        except Exception as e:
+            print(f"Failed to read {filepath}: {e}")
+
+    for url in context.urls:
+        try:
+            page_content = get_url_content_as_string(url)
+            sections.append(make_section("URL", url, page_content))
+        except Exception as e:
+            print(f"Failed to get page content for {url}: {e}")
+
+    if context.main_text:
+        sections.append(make_section("TASK", "Main Content", context.main_text))
+
+    return "\n\n---\n\n".join(sections)
+
 
 # TODO: add dependencies endpoint, to be inserted in prompt, by checking requirements.txt
 
