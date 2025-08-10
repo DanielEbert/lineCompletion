@@ -3,6 +3,7 @@ import fetch from 'node-fetch'
 import * as fs from 'fs';
 import ignore from 'ignore';
 import path from 'path';
+import { exec } from 'child_process';
 
 
 export function getNonce() {
@@ -112,9 +113,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 						this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: [], index: data.index });
 						break;
 					}
-					// Use findFiles - it's async so we need await.
-					// We exclude node_modules and limit results to 50 for performance.
-					const files = await vscode.workspace.findFiles(`**/*${data.query}*`, '**/node_modules/**', 50);
+					const files = await this.findWorkspaceFiles();
 					const workspaceFolders = vscode.workspace.workspaceFolders;
 					if (workspaceFolders) {
 						const workspaceRoot = workspaceFolders[0].uri.fsPath;
@@ -161,6 +160,27 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 				}
 				case 'toggleWebSearch': {
 					await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
+					break;
+				}
+				case 'openUrl': {
+					if (data.url) {
+						await this.copyAllContextToClipboard();
+						vscode.env.openExternal(vscode.Uri.parse(data.url));
+						if (process.platform === 'darwin') {
+							setTimeout(() => {
+								exec(
+									'osascript -e \'tell application "System Events" to keystroke "v" using command down\' -e \'tell application "System Events" to key code 36\'',
+									(error) => {
+										if (error) {
+											console.error(`Failed to execute paste+enter command: ${error}`);
+											vscode.window.showErrorMessage('Auto-paste failed. Please paste manually (Cmd+V).');
+										}
+									}
+								);
+							}, data.pasteDelay);
+						}
+					}
+					break;
 				}
 			}
 		})

@@ -593,6 +593,12 @@
         <button class="btn btn-secondary icon-copy copy-all-full" id="copy-all-btn">
             <span>Copy All</span>
         </button>
+        <button class="btn btn-secondary copy-all-full" id="gemini-btn">
+            <span>Gemini</span>
+        </button>
+        <button class="btn btn-secondary copy-all-full" id="glm-btn">
+            <span>GLM-4.5</span>
+        </button>
         <button class="btn btn-secondary icon-clear clear-all-full" id="clear-all-btn">
             <span>Clear All</span>
         </button>
@@ -797,8 +803,6 @@
                 }
 
                 if (item.type === 'Text') {
-                    // Remove header and badges
-
                     const wrapper = document.createElement('div');
                     wrapper.className = 'suggestion-wrapper';
                     wrapper.style.display = 'flex';
@@ -817,11 +821,9 @@
                     wrapper.appendChild(suggestionBox);
                     wrapper.appendChild(textarea);
 
-                    // Button column (vertical)
                     const btnCol = document.createElement('div');
                     btnCol.className = 'btn-col';
 
-                    // Main (star) button
                     const mainBtn = document.createElement('button');
                     mainBtn.className = 'main-btn';
                     mainBtn.title = index === mainContextIndex ? 'Unset as main context' : 'Set as main context';
@@ -833,12 +835,10 @@
                         vscode.postMessage({ type: 'setMainContext', index: index });
                     });
 
-                    // Show star always if main, else only on hover
                     if (index === mainContextIndex) {
                         mainBtn.classList.add('main-active');
                     }
 
-                    // Delete button
                     const deleteBtn = document.createElement('button');
                     deleteBtn.className = 'delete-btn';
                     deleteBtn.innerHTML = '×';
@@ -888,8 +888,8 @@
             updateStats(context.length);
         }
 
-        // Redefine updateContextList to call both renderContextList and sync the tree
-        let updateContextList = (context, mainContextIndex) => {
+        function updateContextList(context, mainContextIndex) {
+            if (!Array.isArray(context)) return;
             renderContextList(context, mainContextIndex);
             currentFileContextPaths = new Set(
                 context.filter(item => item.type === 'File').map(item => item.context)
@@ -978,7 +978,6 @@
             };
 
             if (li.classList.contains('folder')) {
-                // Collect all child files and check/uncheck them
                 const childCheckboxes = li.querySelectorAll('input[type="checkbox"]');
                 childCheckboxes.forEach(cb => cb.checked = isChecked);
                 collectFiles(li);
@@ -986,7 +985,6 @@
                 filesToUpdate.push({ path: li.dataset.path, checked: isChecked });
             }
 
-            // Send messages to the extension for each file
             filesToUpdate.forEach(file => {
                 if (file.checked) {
                     vscode.postMessage({ type: 'addFileToContext', filePath: file.path });
@@ -1006,6 +1004,34 @@
             });
         }
 
+        function onSuggestions(message) {
+            const { suggestions, index } = message;
+            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
+            if (suggestionBox) {
+                suggestionBox.innerHTML = '';
+                if (suggestions.length > 0) {
+                    suggestionState.suggestions = suggestions;
+                    suggestionState.selectedIndex = 0;
+                    suggestions.forEach((file, i) => {
+                        const item = document.createElement('div');
+                        item.className = 'suggestion-item';
+                        item.textContent = file;
+                        item.title = file;
+                        item.addEventListener('mousedown', (e) => {
+                            e.preventDefault();
+                            const textarea = document.querySelector(`textarea[data-index="${index}"]`);
+                            acceptSuggestion(textarea, file);
+                        });
+                        suggestionBox.appendChild(item);
+                    });
+                    updateSelectedSuggestion(index);
+                    suggestionBox.style.display = 'block';
+                } else {
+                    hideSuggestions(index);
+                }
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const addFileBtn = document.getElementById('add-file-btn');
             const addUrlBtn = document.getElementById('add-url-btn');
@@ -1013,6 +1039,8 @@
             const webSearchToggle = document.getElementById('web-search-toggle');
             const clearAllBtn = document.getElementById('clear-all-btn');
             const copyAllBtn = document.getElementById('copy-all-btn');
+            const geminiBtn = document.getElementById('gemini-btn');
+            const glmBtn = document.getElementById('glm-btn');
             const projectTreeContainer = document.getElementById('project-tree-container');
 
             addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
@@ -1021,7 +1049,13 @@
             clearAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'clearContext' }));
             copyAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'copyAllContext' }));
 
-            // Project tree event listener
+            geminiBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openUrl', url: 'https://aistudio.google.com/prompts/new_chat?hl=de', pasteDelay: 2000 });
+            });
+            glmBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openUrl', url: 'https://chat.z.ai/', pasteDelay: 6000 });  // don't know why, but they take forever to open
+            });
+
             projectTreeContainer.addEventListener('change', handleTreeCheckboxChange);
 
             webSearchToggle.addEventListener('click', () => {
@@ -1042,31 +1076,7 @@
                         break;
                     case 'fileSuggestions':
                         {
-                            const { suggestions, index } = message;
-                            const suggestionBox = document.getElementById(`suggestion-box-${index}`);
-                            if (suggestionBox) {
-                                suggestionBox.innerHTML = '';
-                                if (suggestions.length > 0) {
-                                    suggestionState.suggestions = suggestions;
-                                    suggestionState.selectedIndex = 0;
-                                    suggestions.forEach((file, i) => {
-                                        const item = document.createElement('div');
-                                        item.className = 'suggestion-item';
-                                        item.textContent = file;
-                                        item.title = file;
-                                        item.addEventListener('mousedown', (e) => {
-                                            e.preventDefault();
-                                            const textarea = document.querySelector(`textarea[data-index="${index}"]`);
-                                            acceptSuggestion(textarea, file);
-                                        });
-                                        suggestionBox.appendChild(item);
-                                    });
-                                    updateSelectedSuggestion(index);
-                                    suggestionBox.style.display = 'block';
-                                } else {
-                                    hideSuggestions(index);
-                                }
-                            }
+                            onSuggestions(message)
                             break;
                         }
                     case 'workspaceTree': {
