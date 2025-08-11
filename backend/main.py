@@ -260,11 +260,16 @@ async def get_context(context: Context):
         combined_supplementary = "\n\n---\n\n".join(context.supplementary_text)
         sections.append(make_section("CONTEXT", "Additional Information", combined_supplementary))
 
-    for filepath in context.filepaths:
+    for rel_filepath in context.filepaths:
+        if context.workspaceRoot:
+            filepath = os.path.join(context.workspaceRoot)
+        else:
+            filepath = rel_filepath
+
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 filecontent = f.read()
-            sections.append(make_section("FILE", filepath, filecontent))
+            sections.append(make_section("FILE", rel_filepath, filecontent))
         except Exception as e:
             print(f"Failed to read {filepath}: {e}")
 

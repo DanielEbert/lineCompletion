@@ -236,13 +236,18 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
 		console.log(filepaths)
 
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : null;
+
+
 		const formattedContext = await fetchContext({
 			main_text: mainText,
 			supplementary_text: supplementaryText,
 			urls,
 			filepaths,
 			symbol_implementations: [],
-			web_search_enabled: this._context.workspaceState.get<any>('llmContextWebSearchEnabled', false)
+			web_search_enabled: this._context.workspaceState.get<any>('llmContextWebSearchEnabled', false),
+			workspace_root: workspaceRoot,
 		});
 		if (formattedContext == null) return;  // log called in fetchContext
 
