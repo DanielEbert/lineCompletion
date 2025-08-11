@@ -249,6 +249,17 @@ def make_section(tag: str, title: str, content: str) -> str:
 # [{tag} End] - {title}
 '''
 
+def make_code_section(tag: str, title: str, content: str, language) -> str:
+    return f'''\
+# [{tag} Start] - {title}
+
+```{language}
+{content}
+```
+
+# [{tag} End] - {title}
+'''
+
 
 @app.post('/context')
 async def get_context(context: Context):
@@ -270,7 +281,8 @@ async def get_context(context: Context):
         try:
             with open(filepath, "r", encoding="utf-8") as f:
                 filecontent = f.read()
-            sections.append(make_section("FILE", rel_filepath, filecontent))
+            language = 'python' if filecontent.endswith('.py') else ''
+            sections.append(make_code_section("FILE", rel_filepath, filecontent, language))
         except Exception as e:
             print(f"Failed to read {filepath}: {e}")
 

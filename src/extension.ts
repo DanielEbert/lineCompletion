@@ -268,6 +268,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			// Load and parse .gitignore
 			const ig = ignore();
 			ig.add(fs.readFileSync(gitignorePath, 'utf8'));
+			ig.add('.git');
 
 			// Find all files and filter via .gitignore
 			const allFiles = await vscode.workspace.findFiles('**/*', null);
