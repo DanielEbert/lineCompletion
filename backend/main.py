@@ -11,7 +11,7 @@ import inspect
 import builtins
 from enum import Enum
 
-from .openai_search import get_url_content_as_string
+from openai_search import get_url_content_as_string
 
 
 PY_LANG = tree_sitter.Language(tsp.language())
@@ -58,10 +58,9 @@ class Context(BaseModel):
     supplementary_text: list[str] = []
     urls: list[str] = []
     filepaths: list[str] = []
-
-    # TODO
     symbol_implementations: list[str]
     web_search_enabled: bool
+    workspace_root: str
 
 
 class ContextLocation(BaseModel):
@@ -91,9 +90,11 @@ app.add_middleware(
 )
 
 
+"""
 client = genai.Client(
     api_key=os.environ.get("GEMINI_API_KEY"),
 )
+"""
 
 def parse_llm_completion_output(output: str) -> list[str]:
     print(output)
@@ -261,8 +262,8 @@ async def get_context(context: Context):
         sections.append(make_section("CONTEXT", "Additional Information", combined_supplementary))
 
     for rel_filepath in context.filepaths:
-        if context.workspaceRoot:
-            filepath = os.path.join(context.workspaceRoot)
+        if context.workspace_root:
+            filepath = os.path.join(context.workspace_root, rel_filepath)
         else:
             filepath = rel_filepath
 
