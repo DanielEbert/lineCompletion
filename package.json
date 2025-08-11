@@ -3,6 +3,11 @@
   "displayName": "lineCompletion",
   "description": "",
   "version": "0.0.1",
+  "publisher": "DanielEbert",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DanielEbert/lineCompletion.git"
+  },
   "engines": {
     "vscode": "^1.102.0"
   },
@@ -10,6 +15,9 @@
     "Other"
   ],
   "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:python"
+  ],
   "contributes": {
     "commands": [
       {
@@ -47,7 +55,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
+    "compile": "tsc -p ./ && cpx \"src/webview/**\" out/webview",
+    "local_install": "vsce package && code --uninstall-extension danielebert.linecompletion || code --install-extension ./linecompletion-0.0.1.vsix",
     "watch": "tsc -watch -p ./",
     "pretest": "npm run compile && npm run lint",
     "lint": "eslint src",
@@ -63,6 +72,7 @@
     "@typescript-eslint/parser": "^8.31.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
+    "cpx": "^1.5.0",
     "eslint": "^9.25.1",
     "typescript": "^5.8.3"
   },

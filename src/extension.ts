@@ -24,15 +24,19 @@ interface TreeNode {
 export class ContextViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'llmContextView';
 	private _view?: vscode.WebviewView;
+	private isInDebugMode: boolean;
 
-	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) { }
+	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) {
+		this.isInDebugMode = _context.extensionMode === vscode.ExtensionMode.Development;
+	}
 
 	public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext, token: vscode.CancellationToken): Thenable<void> | void {
 		this._view = webviewView;
 
+		const webviewSource = this.isInDebugMode ? 'src' : 'out';
 		webviewView.webview.options = {
 			enableScripts: true,
-			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'src', 'webview')]
+			localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, webviewSource, 'webview')]
 		}
 
 		webviewView.webview.html = this._getHtml()
@@ -169,7 +173,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 						if (process.platform === 'darwin') {
 							setTimeout(() => {
 								exec(
-									'osascript -e \'tell application "System Events" to keystroke "v" using command down\' -e \'tell application "System Events" to key code 36\'',
+									'osascript -e \'tell application "System Events" to keystroke "v" using command down\' -e \'tell application "System Events" to key code 36 using command down\'',
 									(error) => {
 										if (error) {
 											console.error(`Failed to execute paste+enter command: ${error}`);
@@ -319,7 +323,8 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 	}
 
 	private _getHtml() {
-		const htmlPath = vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'index.html');
+		const webviewSource = this.isInDebugMode ? 'src' : 'out';
+		const htmlPath = vscode.Uri.joinPath(this._extensionUri, webviewSource, 'webview', 'index.html');
 		let htmlContent = fs.readFileSync(htmlPath.fsPath, 'utf8');
 		return htmlContent;
 	}
