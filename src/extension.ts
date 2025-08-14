@@ -307,7 +307,8 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 				}
 				case 'openUrl': {
 					if (data.url) {
-						await this.copyAllContextToClipboard();
+						const success = await this.copyAllContextToClipboard();
+						if (!success) break;
 						vscode.env.openExternal(vscode.Uri.parse(data.url));
 						if (process.platform === 'darwin') {
 							setTimeout(() => {
@@ -350,53 +351,47 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		};
 	}
 
-	private async copyAllContextToClipboard() {
+	private async copyAllContextToClipboard(): Promise<boolean> {
 		const activeInstance = this.getActiveInstance();
 		if (!activeInstance || activeInstance.context.length === 0) {
 			vscode.window.showInformationMessage("No context to copy.");
-			return;
+			return true;
 		}
 
 		const llmContext = activeInstance.context;
 		const mainIndex = activeInstance.mainContextIndex;
 
-		if (llmContext.length === 0) {
-			vscode.window.showInformationMessage("No context to copy.");
-			return;
-		}
-
 		let mainText: string | null = null;
-		const supplementaryText: string[] = []
-		const urls: string[] = []
-		const filepaths: string[] = []
+		const supplementaryText: string[] = [];
+		const urls: string[] = [];
+		const filepaths: string[] = [];
 
-		console.log(llmContext)
+		console.log(llmContext);
 
 		llmContext.forEach((item, index) => {
 			if (item.ignored) {
 				return;
 			}
-			console.log(item.type === 'File' + ' ' + item.type)
+			console.log(item.type === 'File' + ' ' + item.type);
 			if (index === mainIndex) {
 				mainText = item.context;
 				return;
 			}
 
 			if (item.type === 'Text') {
-				supplementaryText.push(item.context)
+				supplementaryText.push(item.context);
 			} else if (item.type === 'File') {
-				console.log(item.type)
+				console.log(item.type);
 				filepaths.push(item.context);
 			} else if (item.type === 'Url') {
-				urls.push(item.context)
+				urls.push(item.context);
 			}
 		});
 
-		console.log(filepaths)
+		console.log(filepaths);
 
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : null;
-
 
 		const formattedContext = await fetchContext({
 			main_text: mainText,
@@ -407,10 +402,13 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			web_search_enabled: activeInstance.webSearchEnabled,
 			workspace_root: workspaceRoot,
 		});
-		if (formattedContext == null) return;  // log called in fetchContext
+		if (formattedContext == null) {
+			return false;
+		}
 
 		await vscode.env.clipboard.writeText(formattedContext);
 		vscode.window.showInformationMessage("All context items copied to clipboard!");
+		return true;
 	}
 
 	private async findWorkspaceFiles() {
@@ -752,14 +750,16 @@ async function fetchContext(context: any): Promise<string | null> {
 		});
 
 		if (!response.ok) {
-			console.error('Backend returned error: ', response.status)
-			console.error(response.text)
+			const errorText = await response.text();
+			console.error('Backend returned error: ', response.status, errorText);
+			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
 			return null;
 		}
 
 		return await response.json();
 	} catch (err) {
 		console.error('Error contacting backend:', err);
+		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
 		return null;
 	}
 }
@@ -774,14 +774,16 @@ async function fetchSymbolImplementation(symbolImplementationLocations: any): Pr
 		});
 
 		if (!response.ok) {
-			console.error('Backend returned error: ', response.status)
-			console.error(response.text)
+			const errorText = await response.text();
+			console.error('Backend returned error: ', response.status, errorText);
+			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
 			return null;
 		}
 
 		return await response.json();
 	} catch (err) {
 		console.error('Error contacting backend:', err);
+		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
 		return null;
 	}
 }
@@ -799,14 +801,16 @@ async function fetchSymbolLocations(path: string, start_line: number, end_line: 
 		});
 
 		if (!response.ok) {
-			console.error('Backend returned error: ', response.status)
-			console.error(response.text)
+			const errorText = await response.text();
+			console.error('Backend returned error: ', response.status, errorText);
+			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
 			return null;
 		}
 
 		return await response.json();
 	} catch (err) {
 		console.error('Error contacting backend:', err);
+		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
 		return null;
 	}
 }
@@ -820,8 +824,9 @@ async function fetchSuggestions(body: any): Promise<string[] | null> {
 		});
 
 		if (!response.ok) {
-			console.error('Backend returned error: ', response.status)
-			console.error(response.text)
+			const errorText = await response.text();
+			console.error('Backend returned error: ', response.status, errorText);
+			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
 			return null;
 		}
 
@@ -829,6 +834,7 @@ async function fetchSuggestions(body: any): Promise<string[] | null> {
 		return data.response;
 	} catch (err) {
 		console.error('Error contacting backend:', err);
+		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
 		return null;
 	}
 }
