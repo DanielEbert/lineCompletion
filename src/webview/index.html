@@ -612,10 +612,107 @@
             bottom: 70px;
             /* Position it above the bottom button */
         }
+
+        /* --- Tab Styles --- */
+        .tabs-container {
+            display: flex;
+            align-items: center;
+            border-bottom: 1px solid var(--vscode-editor-widget-border);
+            margin-bottom: 16px;
+            padding-bottom: 4px;
+            gap: 4px;
+            overflow-x: auto;
+        }
+
+        .tabs-list {
+            display: flex;
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            flex-grow: 1;
+        }
+
+        .tab-item {
+            display: flex;
+            align-items: center;
+            padding: 6px 12px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 4px 4px 0 0;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .tab-item:hover {
+            background-color: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-item.active {
+            background-color: var(--vscode-side-bar-background);
+            border-color: var(--vscode-editor-widget-border);
+            border-bottom: 1px solid var(--vscode-side-bar-background);
+            color: var(--vscode-editor-foreground);
+            margin-bottom: -1px;
+        }
+
+        .tab-name {
+            font-size: 13px;
+        }
+
+        .tab-name-input {
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-focus-border);
+            border-radius: 2px;
+            padding: 2px 4px;
+            font-size: 13px;
+            width: 100px;
+        }
+
+        .close-tab-btn {
+            background: none;
+            border: none;
+            color: var(--vscode-description-foreground);
+            cursor: pointer;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0.7;
+        }
+
+        .close-tab-btn:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+            opacity: 1;
+        }
+
+        #add-tab-btn {
+            flex-shrink: 0;
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+            font-weight: bold;
+            background-color: transparent;
+            color: var(--vscode-icon-foreground);
+        }
+
+        #add-tab-btn:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
     </style>
 </head>
 
 <body>
+    <div class="tabs-container">
+        <ul id="tabs-list" class="tabs-list"></ul>
+        <button id="add-tab-btn" title="New Tab">+</button>
+    </div>
     <div class="header">
         <div class="controls">
             <button class="btn icon-file" id="add-file-btn">
@@ -697,7 +794,11 @@
             }
         }
 
-        let webSearchEnabled = false;
+        let appState = {
+            activeInstanceId: null,
+            instances: [],
+        };
+
         const suggestionState = {
             suggestions: [],
             selectedIndex: -1,
@@ -725,10 +826,10 @@
             });
         }, 500);
 
-        function updateWebSearchUI() {
+        function updateWebSearchUI(isEnabled) {
             const webSearchToggle = document.getElementById('web-search-toggle');
             const searchStatus = document.getElementById('search-status');
-            if (webSearchEnabled) {
+            if (isEnabled) {
                 webSearchToggle.classList.add('active');
                 searchStatus.textContent = 'Web search: ON';
             } else {
@@ -847,6 +948,71 @@
             });
 
             vscode.postMessage({ type: 'addFileToContext', filePath: filePath });
+        }
+
+        function renderTabs() {
+            const tabsList = document.getElementById('tabs-list');
+            tabsList.innerHTML = '';
+
+            appState.instances.forEach(instance => {
+                const li = document.createElement('li');
+                li.className = 'tab-item';
+                li.dataset.id = instance.id;
+                if (instance.id === appState.activeInstanceId) {
+                    li.classList.add('active');
+                }
+
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'tab-name';
+                nameSpan.textContent = instance.name;
+
+                li.appendChild(nameSpan);
+
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'close-tab-btn';
+                closeBtn.innerHTML = '&times;';
+                closeBtn.title = 'Close Tab';
+                closeBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    vscode.postMessage({ type: 'removeInstance', instanceId: instance.id });
+                });
+                li.appendChild(closeBtn);
+
+                li.addEventListener('click', () => {
+                    if (instance.id !== appState.activeInstanceId) {
+                        vscode.postMessage({ type: 'switchInstance', instanceId: instance.id });
+                    }
+                });
+
+                nameSpan.addEventListener('dblclick', () => {
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.value = nameSpan.textContent;
+                    input.className = 'tab-name-input';
+                    li.replaceChild(input, nameSpan);
+                    input.focus();
+
+                    const finishEditing = () => {
+                        const newName = input.value.trim();
+                        if (newName && newName !== instance.name) {
+                            vscode.postMessage({ type: 'renameInstance', instanceId: instance.id, newName });
+                        } else {
+                            // No change, just revert
+                            li.replaceChild(nameSpan, input);
+                        }
+                    };
+                    input.addEventListener('blur', finishEditing);
+                    input.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') {
+                            finishEditing();
+                        } else if (e.key === 'Escape') {
+                            li.replaceChild(nameSpan, input); // Cancel edit
+                        }
+                    });
+                });
+
+                tabsList.appendChild(li);
+            });
         }
 
         function renderContextList(context, mainContextIndex) {
@@ -1171,20 +1337,32 @@
             window.addEventListener('resize', handleScrollButtons);
 
             webSearchToggle.addEventListener('click', () => {
-                webSearchEnabled = !webSearchEnabled;
-                updateWebSearchUI();
-                vscode.postMessage({ type: 'toggleWebSearch', enabled: webSearchEnabled });
+                const activeInstance = appState.instances.find(i => i.id === appState.activeInstanceId);
+                if (activeInstance) {
+                    const newEnabledState = !activeInstance.webSearchEnabled;
+                    updateWebSearchUI(newEnabledState);
+                    vscode.postMessage({ type: 'toggleWebSearch', enabled: newEnabledState });
+                }
+            });
+
+            document.getElementById('add-tab-btn').addEventListener('click', () => {
+                vscode.postMessage({ type: 'addInstance' });
             });
 
             window.addEventListener('message', event => {
                 const message = event.data;
                 switch (message.type) {
-                    case 'update':
-                        updateContextList(message.context, message.mainContextIndex);
-                        break;
-                    case 'webSearchState':
-                        webSearchEnabled = message.enabled;
-                        updateWebSearchUI();
+                    case 'updateState':
+                        appState = message.state;
+                        renderTabs();
+                        const activeInstance = appState.instances.find(i => i.id === appState.activeInstanceId);
+                        if (activeInstance) {
+                            updateContextList(activeInstance.context, activeInstance.mainContextIndex);
+                            updateWebSearchUI(activeInstance.webSearchEnabled);
+                        } else {
+                            updateContextList([], -1);
+                            updateWebSearchUI(false);
+                        }
                         break;
                     case 'fileSuggestions':
                         {
@@ -1228,7 +1406,6 @@
 
             vscode.postMessage({ type: 'requestUpdate' });
             vscode.postMessage({ type: 'getWorkspaceTree' });
-            updateWebSearchUI();
 
             setTimeout(handleScrollButtons, 1000);
         });

@@ -6,6 +6,19 @@ import path from 'path';
 import { exec } from 'child_process';
 
 
+interface ContextInstance {
+	id: string;
+	name: string;
+	context: any[];
+	mainContextIndex: number;
+	webSearchEnabled: boolean;
+}
+
+interface ExtensionState {
+	activeInstanceId: string | null;
+	instances: ContextInstance[];
+}
+
 export function getNonce() {
 	let text = '';
 	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -28,18 +41,56 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 
 	constructor(private readonly _extensionUri: vscode.Uri, private _context: vscode.ExtensionContext) {
 		this.isInDebugMode = _context.extensionMode === vscode.ExtensionMode.Development;
+		this.initializeState();
+	}
+
+	private initializeState() {
+		const state = this.getState();
+		if (!state || !state.instances || state.instances.length === 0) {
+			const newId = this.generateInstanceId();
+			const defaultState: ExtensionState = {
+				activeInstanceId: newId,
+				instances: [{
+					id: newId,
+					name: 'Default',
+					context: [],
+					mainContextIndex: -1,
+					webSearchEnabled: false,
+				}]
+			};
+			this.setState(defaultState);
+		}
+	}
+
+	private generateInstanceId(): string {
+		return Date.now().toString(36) + Math.random().toString(36).substring(2);
+	}
+
+	private getState(): ExtensionState {
+		return this._context.workspaceState.get<ExtensionState>('llmContextState', { activeInstanceId: null, instances: [] });
+	}
+
+	private setState(state: ExtensionState) {
+		return this._context.workspaceState.update('llmContextState', state);
+	}
+
+	private getActiveInstance(): ContextInstance | undefined {
+		const state = this.getState();
+		if (!state.activeInstanceId) return undefined;
+		return state.instances.find(inst => inst.id === state.activeInstanceId);
 	}
 
 	public async addSelectionToContext() {
 		const editor = vscode.window.activeTextEditor;
-		const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
+		const activeInstance = this.getActiveInstance();
+		if (!activeInstance) return;
+
 		if (editor && !editor.selection.isEmpty) {
 			const selection = editor.selection;
 			const selectedText = editor.document.getText(selection);
 
-			const newContext = [...currentContext, { type: 'Text', context: selectedText, ignored: false }];
-			await this._context.workspaceState.update('llmContext', newContext);
-			this.updateView();
+			activeInstance.context.push({ type: 'Text', context: selectedText, ignored: false });
+			this.updateStateAndRefreshView();
 		} else {
 			vscode.window.showInformationMessage('No text selected in the active editor.');
 		}
@@ -57,60 +108,113 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		webviewView.webview.html = this._getHtml()
 
 		webviewView.webview.onDidReceiveMessage(async (data) => {
-			const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
+			const state = this.getState();
+			const activeInstance = this.getActiveInstance();
 
 			switch (data.type) {
+				case 'addInstance': {
+					const newId = this.generateInstanceId();
+					const newInstance: ContextInstance = {
+						id: newId,
+						name: `Tab ${state.instances.length + 1}`,
+						context: [],
+						mainContextIndex: -1,
+						webSearchEnabled: false,
+					};
+					state.instances.push(newInstance);
+					state.activeInstanceId = newId;
+					await this.setState(state);
+					this.updateView();
+					break;
+				}
+				case 'removeInstance': {
+					const { instanceId } = data;
+					const indexToRemove = state.instances.findIndex(inst => inst.id === instanceId);
+					if (indexToRemove === -1) break;
+
+					state.instances.splice(indexToRemove, 1);
+
+					if (state.activeInstanceId === instanceId) {
+						if (state.instances.length > 0) {
+							const newActiveIndex = Math.max(0, indexToRemove - 1);
+							state.activeInstanceId = state.instances[newActiveIndex].id;
+						} else {
+							state.activeInstanceId = null;
+						}
+					}
+
+					if (state.instances.length === 0) {
+						this.initializeState();
+					} else {
+						await this.setState(state);
+					}
+					this.updateView();
+					break;
+				}
+				case 'switchInstance': {
+					state.activeInstanceId = data.instanceId;
+					await this.setState(state);
+					this.updateView();
+					break;
+				}
+				case 'renameInstance': {
+					const { instanceId, newName } = data;
+					const instanceToRename = state.instances.find(inst => inst.id === instanceId);
+					if (instanceToRename) {
+						instanceToRename.name = newName;
+						await this.setState(state);
+						this.updateView();
+					}
+					break;
+				}
 				case 'getWorkspaceTree': {
 					const tree = await this._getWorkspaceTree();
 					this._view?.webview.postMessage({ type: 'workspaceTree', tree });
 					break;
 				}
 				case 'addFileToContext': {
-					if (data.filePath && !currentContext.some(item => item.type === 'File' && item.context === data.filePath)) {
-						console.log('data.filePath', data.filePath)
-						const newContext = [...currentContext, { type: 'File', context: data.filePath }];
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
+					if (!activeInstance) break;
+					if (data.filePath && !activeInstance.context.some(item => item.type === 'File' && item.context === data.filePath)) {
+						activeInstance.context.push({ type: 'File', context: data.filePath });
+						await this.updateStateAndRefreshView();
 					}
 					break;
 				}
 				case 'removeFileFromContext': {
+					if (!activeInstance) break;
 					if (data.filePath) {
-						const newContext = currentContext.filter(item => !(item.type === 'File' && item.context === data.filePath));
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
+						activeInstance.context = activeInstance.context.filter(item => !(item.type === 'File' && item.context === data.filePath));
+						await this.updateStateAndRefreshView();
 					}
 					break;
 				}
 				case 'addFile': {
+					if (!activeInstance) break;
 					const fileUri = await vscode.window.showOpenDialog({ canSelectMany: false });
 					if (fileUri && fileUri.length > 0) {
 						const workspaceFolders = vscode.workspace.workspaceFolders;
 						if (workspaceFolders) {
 							const workspaceRoot = workspaceFolders[0].uri.fsPath;
 							const relativePath = path.relative(workspaceRoot, fileUri[0].fsPath);
-							const newContext = [...currentContext, { type: 'File', context: relativePath }]
-							await this._context.workspaceState.update('llmContext', newContext);
-							this.updateView();
+							activeInstance.context.push({ type: 'File', context: relativePath });
+							await this.updateStateAndRefreshView();
 						}
 					}
 					break;
 				}
 				case 'addUrl': {
+					if (!activeInstance) break;
 					const url = await vscode.window.showInputBox({ prompt: 'Enter URL' });
 					if (url && url.length > 0) {
-						// TODO: on backend we want to fetch and summarize/parse website
-						const newContext = [...currentContext, { type: 'Url', context: url }]
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
+						activeInstance.context.push({ type: 'Url', context: url });
+						await this.updateStateAndRefreshView();
 					}
 					break;
 				}
 				case 'addText': {
-					// Adding text now defaults to an empty string, allowing inline editing.
-					const newContext = [...currentContext, { type: 'Text', context: "", ignored: false }]
-					await this._context.workspaceState.update('llmContext', newContext);
-					this.updateView();
+					if (!activeInstance) break;
+					activeInstance.context.push({ type: 'Text', context: "", ignored: false });
+					await this.updateStateAndRefreshView();
 					break;
 				}
 				case 'addSelectionToContext': {
@@ -118,28 +222,22 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 				case 'setMainContext': {
-					const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
-
-					// If the clicked index is the current main index, we toggle it off by setting the index to -1.
-					// Otherwise, we set the clicked index as the new main index.
-					const newIndex = mainIndex === data.index ? -1 : data.index;
-
-					// We only allow 'Text' items to be set as main. Unsetting (when newIndex is -1) is always allowed.
-					if (newIndex === -1 || currentContext[newIndex]?.type === 'Text') {
-						await this._context.workspaceState.update('llmMainContextIndex', newIndex);
-						this.updateView();
+					if (!activeInstance) break;
+					const newIndex = activeInstance.mainContextIndex === data.index ? -1 : data.index;
+					if (newIndex === -1 || activeInstance.context[newIndex]?.type === 'Text') {
+						activeInstance.mainContextIndex = newIndex;
+						await this.updateStateAndRefreshView();
 					}
 					break;
 				}
 				case 'toggleIgnoreContext': {
-					if (data.index >= 0 && data.index < currentContext.length) {
-						const newContext = [...currentContext];
-						const item = newContext[data.index];
-						if (item.type === 'Text') { // Only text items can be ignored
+					if (!activeInstance) break;
+					if (data.index >= 0 && data.index < activeInstance.context.length) {
+						const item = activeInstance.context[data.index];
+						if (item.type === 'Text') {
 							item.ignored = !item.ignored;
 						}
-						await this._context.workspaceState.update('llmContext', newContext);
-						this.updateView();
+						await this.updateStateAndRefreshView();
 					}
 					break;
 				}
@@ -158,31 +256,32 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 				case 'updateTextContext': {
-					if (data.index >= 0 && data.index < currentContext.length) {
-						const newContext = [...currentContext];
-						newContext[data.index].context = data.context;
-						await this._context.workspaceState.update('llmContext', newContext);
+					if (!activeInstance) break;
+					if (data.index >= 0 && data.index < activeInstance.context.length) {
+						activeInstance.context[data.index].context = data.context;
+						await this.setState(state);
 					}
 					break;
 				}
 				case 'removeContext': {
-					const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
-					const newContext = currentContext.filter((_, index) => index !== data.index);
+					if (!activeInstance) break;
+					const mainIndex = activeInstance.mainContextIndex;
+					activeInstance.context = activeInstance.context.filter((_, index) => index !== data.index);
 
 					if (data.index === mainIndex) {
-						await this._context.workspaceState.update('llmMainContextIndex', -1);
+						activeInstance.mainContextIndex = -1;
 					} else if (data.index < mainIndex) {
-						await this._context.workspaceState.update('llmMainContextIndex', mainIndex - 1);
+						activeInstance.mainContextIndex = mainIndex - 1;
 					}
 
-					await this._context.workspaceState.update('llmContext', newContext);
-					this.updateView();
+					await this.updateStateAndRefreshView();
 					break;
 				}
 				case 'clearContext': {
-					await this._context.workspaceState.update('llmContext', []);
-					await this._context.workspaceState.update('llmMainContextIndex', -1);
-					this.updateView();
+					if (!activeInstance) break;
+					activeInstance.context = [];
+					activeInstance.mainContextIndex = -1;
+					await this.updateStateAndRefreshView();
 					break;
 				}
 				case 'copyAllContext': {
@@ -194,7 +293,10 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					break;
 				}
 				case 'toggleWebSearch': {
-					await this._context.workspaceState.update('llmContextWebSearchEnabled', data.enabled);
+					if (activeInstance) {
+						activeInstance.webSearchEnabled = data.enabled;
+						await this.updateStateAndRefreshView();
+					}
 					break;
 				}
 				case 'openUrl': {
@@ -221,20 +323,36 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		})
 	}
 
+	private async updateStateAndRefreshView() {
+		// This is not a noop - we modified activeInstance via a pointer before, which is now dirty and not yet persisted.
+		// We call setState on the dirty activeInstance to tell vscode to persist the modified data.
+		const state = this.getState();
+		await this.setState(state);
+		this.updateView();
+	}
+
 	public updateView() {
 		if (!this._view) return;
-		const context = this._context.workspaceState.get('llmContext', []);
-		const mainContextIndex = this._context.workspaceState.get('llmMainContextIndex', -1);
-		this._view.webview.postMessage({ type: 'update', context, mainContextIndex });
+		const state = this.getState();
+		const activeInstance = this.getActiveInstance();
+		const contextLength = activeInstance ? activeInstance.context.length : 0;
+
+		this._view.webview.postMessage({ type: 'updateState', state });
 		this._view.badge = {
-			value: context.length,
-			tooltip: `${context.length} context items`
+			value: contextLength,
+			tooltip: `${contextLength} context items`
 		};
 	}
 
 	private async copyAllContextToClipboard() {
-		const llmContext = this._context.workspaceState.get<any[]>('llmContext', []);
-		const mainIndex = this._context.workspaceState.get<number>('llmMainContextIndex', -1);
+		const activeInstance = this.getActiveInstance();
+		if (!activeInstance || activeInstance.context.length === 0) {
+			vscode.window.showInformationMessage("No context to copy.");
+			return;
+		}
+
+		const llmContext = activeInstance.context;
+		const mainIndex = activeInstance.mainContextIndex;
 
 		if (llmContext.length === 0) {
 			vscode.window.showInformationMessage("No context to copy.");
@@ -280,7 +398,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			urls,
 			filepaths,
 			symbol_implementations: [],
-			web_search_enabled: this._context.workspaceState.get<any>('llmContextWebSearchEnabled', false),
+			web_search_enabled: activeInstance.webSearchEnabled,
 			workspace_root: workspaceRoot,
 		});
 		if (formattedContext == null) return;  // log called in fetchContext
