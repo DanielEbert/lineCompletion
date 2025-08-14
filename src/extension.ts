@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import ignore from 'ignore';
 import path from 'path';
 import { exec } from 'child_process';
+import Fuse from 'fuse.js';
 
 
 interface ContextInstance {
@@ -250,7 +251,12 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					const workspaceFolders = vscode.workspace.workspaceFolders;
 					if (workspaceFolders) {
 						const workspaceRoot = workspaceFolders[0].uri.fsPath;
-						const suggestions = files.map(file => path.relative(workspaceRoot, file.path));
+						const allFilePaths = files.map(file => path.relative(workspaceRoot, file.path));
+
+						const fuse = new Fuse(allFilePaths, { threshold: 0.4 });
+						const searchResults = fuse.search(data.query);
+						const suggestions = searchResults.map(result => result.item).slice(0, 20);
+
 						this._view?.webview.postMessage({ type: 'fileSuggestions', suggestions: suggestions, index: data.index });
 					}
 					break;
