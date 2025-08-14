@@ -23,6 +23,11 @@
       {
         "command": "linecompletion.suggestFromContext",
         "title": "Suggest Based on Context"
+      },
+      {
+        "command": "linecompletion.addSelectionToContext",
+        "title": "Add Selection to Context",
+        "category": "LineCompletion"
       }
     ],
     "keybindings": [
@@ -30,6 +35,12 @@
         "command": "linecompletion.suggestFromContext",
         "key": "cmd+shift+w",
         "mac": "ctrl+shift+w",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "linecompletion.addSelectionToContext",
+        "key": "ctrl+alt+c",
+        "mac": "ctrl+cmd+c",
         "when": "editorTextFocus"
       }
     ],

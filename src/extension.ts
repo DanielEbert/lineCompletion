@@ -30,6 +30,21 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		this.isInDebugMode = _context.extensionMode === vscode.ExtensionMode.Development;
 	}
 
+	public async addSelectionToContext() {
+		const editor = vscode.window.activeTextEditor;
+		const currentContext = this._context.workspaceState.get<any[]>('llmContext', []);
+		if (editor && !editor.selection.isEmpty) {
+			const selection = editor.selection;
+			const selectedText = editor.document.getText(selection);
+
+			const newContext = [...currentContext, { type: 'Text', context: selectedText, ignored: false }];
+			await this._context.workspaceState.update('llmContext', newContext);
+			this.updateView();
+		} else {
+			vscode.window.showInformationMessage('No text selected in the active editor.');
+		}
+	}
+
 	public resolveWebviewView(webviewView: vscode.WebviewView, context: vscode.WebviewViewResolveContext, token: vscode.CancellationToken): Thenable<void> | void {
 		this._view = webviewView;
 
@@ -96,6 +111,10 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					const newContext = [...currentContext, { type: 'Text', context: "", ignored: false }]
 					await this._context.workspaceState.update('llmContext', newContext);
 					this.updateView();
+					break;
+				}
+				case 'addSelectionToContext': {
+					this.addSelectionToContext();
 					break;
 				}
 				case 'setMainContext': {
@@ -466,6 +485,11 @@ export function activate(context: vscode.ExtensionContext) {
 	const contextProvider = new ContextViewProvider(context.extensionUri, context);
 	context.subscriptions.push(
 		vscode.window.registerWebviewViewProvider(ContextViewProvider.viewType, contextProvider)
+	);
+	context.subscriptions.push(
+		vscode.commands.registerCommand('linecompletion.addSelectionToContext', () => {
+			contextProvider.addSelectionToContext();
+		})
 	);
 
 	const provider: vscode.InlineCompletionItemProvider = {
