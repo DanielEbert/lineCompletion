@@ -502,7 +502,7 @@
         }
 
         /* Make indentation work by adding padding to nested lists.
-   This is the key to making it look like a tree. */
+        This is the key to making it look like a tree. */
         .tree-item .tree-list {
             padding-left: 24px;
         }
@@ -584,6 +584,34 @@
         .tree-item.open>.tree-children {
             display: block;
         }
+
+        .jump-btn {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background-color: var(--vscode-button-secondary-background);
+            color: var(--vscode-button-foreground);
+            border: 1px solid var(--vscode-editor-widget-border);
+            cursor: pointer;
+            display: none;
+            /* Hidden by default */
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            z-index: 1000;
+        }
+
+        .jump-btn:hover {
+            background-color: var(--vscode-button-secondary-hover-background);
+        }
+
+        #jump-to-top-btn {
+            bottom: 70px;
+            /* Position it above the bottom button */
+        }
     </style>
 </head>
 
@@ -639,8 +667,35 @@
         </button>
     </div>
 
+    <button id="jump-to-top-btn" class="jump-btn" title="Jump to Top">▲</button>
+    <button id="jump-to-bottom-btn" class="jump-btn" title="Jump to Bottom">▼</button>
+
     <script>
         const vscode = acquireVsCodeApi();
+
+        function handleScrollButtons() {
+            const jumpToTopBtn = document.getElementById('jump-to-top-btn');
+            const jumpToBottomBtn = document.getElementById('jump-to-bottom-btn');
+            if (!jumpToTopBtn || !jumpToBottomBtn) return;
+
+            const scrollHeight = document.documentElement.scrollHeight;
+            const clientHeight = document.documentElement.clientHeight;
+            const scrollY = window.scrollY;
+            const scrollThreshold = 50; // A small buffer
+
+            // Only show buttons if the content is scrollable
+            if (scrollHeight > clientHeight) {
+                // "Jump to Top" button
+                jumpToTopBtn.style.display = (scrollY > scrollThreshold) ? 'flex' : 'none';
+
+                // "Jump to Bottom" button
+                const atBottom = scrollY >= (scrollHeight - clientHeight - scrollThreshold);
+                jumpToBottomBtn.style.display = atBottom ? 'none' : 'flex';
+            } else {
+                jumpToTopBtn.style.display = 'none';
+                jumpToBottomBtn.style.display = 'none';
+            }
+        }
 
         let webSearchEnabled = false;
         const suggestionState = {
@@ -804,10 +859,10 @@
                 const emptyDiv = document.createElement('div');
                 emptyDiv.className = 'empty-state';
                 emptyDiv.innerHTML = `
-                    <div class="icon">📋</div>
-                    <div>No context items yet</div>
-                    <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Add files, URLs, or text to get started</div>
-                `;
+            <div class="icon">📋</div>
+            <div>No context items yet</div>
+            <div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">Add files, URLs, or text to get started</div>
+            `;
                 contextList.appendChild(emptyDiv);
                 return;
             }
@@ -954,6 +1009,7 @@
                 contextList.appendChild(li);
             });
             updateStats(context.length);
+            setTimeout(handleScrollButtons, 150); // Check scroll button visibility after render
         }
 
         // Redefine updateContextList to call both renderContextList and sync the tree
@@ -1085,6 +1141,8 @@
             const geminiBtn = document.getElementById('gemini-btn');
             const glmBtn = document.getElementById('glm-btn');
             const projectTreeContainer = document.getElementById('project-tree-container');
+            const jumpToTopBtn = document.getElementById('jump-to-top-btn');
+            const jumpToBottomBtn = document.getElementById('jump-to-bottom-btn');
 
             addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
             addUrlBtn.addEventListener('click', () => vscode.postMessage({ type: 'addUrl' }));
@@ -1100,6 +1158,17 @@
             });
 
             projectTreeContainer.addEventListener('change', handleTreeCheckboxChange);
+
+            jumpToTopBtn.addEventListener('click', () => {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+
+            jumpToBottomBtn.addEventListener('click', () => {
+                window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+            });
+
+            window.addEventListener('scroll', handleScrollButtons);
+            window.addEventListener('resize', handleScrollButtons);
 
             webSearchToggle.addEventListener('click', () => {
                 webSearchEnabled = !webSearchEnabled;
@@ -1160,6 +1229,8 @@
             vscode.postMessage({ type: 'requestUpdate' });
             vscode.postMessage({ type: 'getWorkspaceTree' });
             updateWebSearchUI();
+
+            setTimeout(handleScrollButtons, 1000);
         });
     </script>
 </body>
