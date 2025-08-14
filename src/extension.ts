@@ -93,7 +93,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 				}
 				case 'addText': {
 					// Adding text now defaults to an empty string, allowing inline editing.
-					const newContext = [...currentContext, { type: 'Text', context: "" }]
+					const newContext = [...currentContext, { type: 'Text', context: "", ignored: false }]
 					await this._context.workspaceState.update('llmContext', newContext);
 					this.updateView();
 					break;
@@ -108,6 +108,18 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					// We only allow 'Text' items to be set as main. Unsetting (when newIndex is -1) is always allowed.
 					if (newIndex === -1 || currentContext[newIndex]?.type === 'Text') {
 						await this._context.workspaceState.update('llmMainContextIndex', newIndex);
+						this.updateView();
+					}
+					break;
+				}
+				case 'toggleIgnoreContext': {
+					if (data.index >= 0 && data.index < currentContext.length) {
+						const newContext = [...currentContext];
+						const item = newContext[data.index];
+						if (item.type === 'Text') { // Only text items can be ignored
+							item.ignored = !item.ignored;
+						}
+						await this._context.workspaceState.update('llmContext', newContext);
 						this.updateView();
 					}
 					break;
@@ -218,6 +230,9 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		console.log(llmContext)
 
 		llmContext.forEach((item, index) => {
+			if (item.ignored) {
+				return;
+			}
 			console.log(item.type === 'File' + ' ' + item.type)
 			if (index === mainIndex) {
 				mainText = item.context;

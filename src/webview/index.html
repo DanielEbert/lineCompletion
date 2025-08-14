@@ -344,6 +344,43 @@
             background: rgba(248, 81, 73, 0.2);
         }
 
+        .ignore-btn {
+            width: 28px;
+            height: 28px;
+            border: none;
+            background: rgba(157, 157, 157, 0.1);
+            color: var(--vscode-description-foreground);
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            margin-bottom: 4px;
+            opacity: 0;
+            transition: all 0.15s ease;
+            z-index: 2;
+        }
+
+        .context-item:hover .ignore-btn:not(.ignored-active) {
+            opacity: 1;
+        }
+
+        .ignore-btn:hover {
+            background: rgba(157, 157, 157, 0.2);
+        }
+
+        .ignore-btn.ignored-active {
+            background: rgba(157, 157, 157, 0.2);
+            color: var(--vscode-description-foreground);
+            opacity: 1 !important;
+        }
+
+        .context-item.ignored .editable-text {
+            opacity: 0.5;
+            background-color: rgba(0, 0, 0, 0.1);
+        }
+
         .editable-text {
             width: 100%;
             background-color: var(--vscode-input-background);
@@ -781,6 +818,9 @@
                 if (index === mainContextIndex) {
                     li.classList.add('main-context');
                 }
+                if (item.ignored) {
+                    li.classList.add('ignored');
+                }
 
                 const contentDiv = document.createElement('div');
                 contentDiv.className = 'item-content';
@@ -827,8 +867,6 @@
                 }
 
                 if (item.type === 'Text') {
-                    // Remove header and badges
-
                     const wrapper = document.createElement('div');
                     wrapper.className = 'suggestion-wrapper';
                     wrapper.style.display = 'flex';
@@ -877,7 +915,20 @@
                         vscode.postMessage({ type: 'removeContext', index: index });
                     });
 
+                    // Ignore (eye) button
+                    const ignoreBtn = document.createElement('button');
+                    ignoreBtn.className = 'ignore-btn';
+                    ignoreBtn.title = item.ignored ? 'Include this context' : 'Ignore this context';
+                    ignoreBtn.innerHTML = item.ignored ? '🙈' : '👁️';
+                    if (item.ignored) {
+                        ignoreBtn.classList.add('ignored-active');
+                    }
+                    ignoreBtn.addEventListener('click', () => {
+                        vscode.postMessage({ type: 'toggleIgnoreContext', index: index });
+                    });
+
                     btnCol.appendChild(mainBtn);
+                    btnCol.appendChild(ignoreBtn);
                     btnCol.appendChild(deleteBtn);
 
                     btnCol.style.display = 'flex';
