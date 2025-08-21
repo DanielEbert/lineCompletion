@@ -4,6 +4,7 @@
   "description": "",
   "version": "0.0.1",
   "publisher": "DanielEbert",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/DanielEbert/lineCompletion.git"
