@@ -20,6 +20,13 @@ interface ExtensionState {
 	instances: ContextInstance[];
 }
 
+interface TreeNode {
+	type: 'file' | 'folder';
+	path: string;
+	children: { [key: string]: TreeNode };
+}
+
+
 export function getNonce() {
 	let text = '';
 	const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -29,11 +36,103 @@ export function getNonce() {
 	return text;
 }
 
-interface TreeNode {
-	type: 'file' | 'folder';
-	path: string;
-	children: { [key: string]: TreeNode };
+function makeSection(tag: string, title: string, content: string): string {
+	return `
+# [${tag} Start] - ${title}
+
+${content}
+
+# [${tag} End] - ${title}
+`;
 }
+
+function makeCodeSection(tag: string, title: string, content: string, language: string): string {
+	return `
+# [${tag} Start] - ${title}
+
+\`\`\`${language}
+${content}
+\`\`\`
+
+# [${tag} End] - ${title}
+`;
+}
+
+async function urlToText(url: string, jinaApiKey: string): Promise<string> {
+	const response = await fetch(`https://r.jina.ai/${url}`, {
+		headers: jinaApiKey ? { Authorization: `Bearer ${jinaApiKey}` } : {}
+	});
+
+	if (!response.ok) {
+		const text = await response.text();
+		throw new Error(`Failed to fetch data: ${response.status} ${response.statusText} - ${text}`);
+	}
+
+	const data = await response.text();
+	return data;
+}
+
+/**
+ * Processes context pieces to generate a consolidated context string of all relevant information.
+ *
+ * @param mainText - The primary text content for the main task.
+ * @param supplementaryText - An array of additional text snippets for context.
+ * @param urls - An array of URLs to fetch and include.
+ * @param filepaths - An array of relative file paths to read and include.
+ * @param symbolImplementations - An array of strings representing symbol implementations.
+ * @param webSearchEnabled - A boolean indicating if web search is enabled.
+ * @param workspaceRoot - The root path of the workspace for resolving file paths.
+ * @param jinaApiKey - The Jina API key for fetching URL content.
+ * @returns A promise that resolves to the formatted context string.
+ */
+async function getContext(
+	mainText: string | null,
+	supplementaryText: string[],
+	urls: string[],
+	filepaths: string[],
+	symbolImplementations: string[],  // TODO
+	webSearchEnabled: boolean,  // TODO
+	workspaceRoot: string | null,
+	jinaApiKey: string
+): Promise<string> {
+	const sections: string[] = [];
+
+	if (mainText) {
+		sections.push(makeSection("TASK", "Main Content", mainText));
+	}
+
+	if (supplementaryText.length > 0) {
+		const combinedSupplementary = supplementaryText.join("\n\n---\n\n");
+		sections.push(makeSection("CONTEXT", "Additional Information", combinedSupplementary));
+	}
+
+	for (const relFilepath of filepaths) {
+		const filepath = workspaceRoot ? `${workspaceRoot}/${relFilepath}` : relFilepath;
+
+		try {
+			const filecontent = fs.readFileSync(filepath, "utf-8");
+			const language = relFilepath.endsWith('.py') ? 'python' : '';
+			sections.push(makeCodeSection("FILE", relFilepath, filecontent, language));
+		} catch (e) {
+			console.error(`Failed to read ${filepath}: ${e}`);
+		}
+	}
+
+	for (const url of urls) {
+		try {
+			sections.push(makeSection("URL", url, await urlToText(url, jinaApiKey)));
+		} catch (e) {
+			console.error(`Failed to get page content for ${url}: ${e}`);
+		}
+	}
+
+	if (mainText) {
+		sections.push(makeSection("TASK", "Main Content", mainText));
+	}
+
+	return sections.join("\n\n---\n\n");
+}
+
 
 export class ContextViewProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'llmContextView';
@@ -305,6 +404,12 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					}
 					break;
 				}
+				case 'setJinaApiKey': {
+					if (typeof data.apiKey === 'string') {
+						await this._context.workspaceState.update('jinaApiKey', data.apiKey);
+					}
+					break;
+				}
 				case 'openUrl': {
 					if (data.url) {
 						const success = await this.copyAllContextToClipboard();
@@ -343,8 +448,14 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		const state = this.getState();
 		const activeInstance = this.getActiveInstance();
 		const contextLength = activeInstance ? activeInstance.context.length : 0;
+		const jinaApiKey = this._context.workspaceState.get<string>('jinaApiKey', '');
 
-		this._view.webview.postMessage({ type: 'updateState', state });
+		this._view.webview.postMessage({
+			type: 'update',
+			state: state,
+			settings: { jinaApiKey }
+		});
+
 		this._view.badge = {
 			value: contextLength,
 			tooltip: `${contextLength} context items`
@@ -388,20 +499,23 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 			}
 		});
 
+		const jinaApiKey = this._context.workspaceState.get<string>('jinaApiKey');
+
 		console.log(filepaths);
 
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : null;
 
-		const formattedContext = await fetchContext({
-			main_text: mainText,
-			supplementary_text: supplementaryText,
+		const formattedContext = await getContext(
+			mainText,
+			supplementaryText,
 			urls,
 			filepaths,
-			symbol_implementations: [],
-			web_search_enabled: activeInstance.webSearchEnabled,
-			workspace_root: workspaceRoot,
-		});
+			[],
+			activeInstance.webSearchEnabled,
+			workspaceRoot,
+			jinaApiKey || '',
+		);
 		if (formattedContext == null) {
 			return false;
 		}
@@ -492,39 +606,6 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 	}
 }
 
-/**
- * Checks if a line is semantically empty for Python code.
- * A line is considered semantically empty if it contains only whitespace,
- * or if it contains only whitespace followed by a comment.
- * @param line The line of text to check.
- */
-function isLineSemanticallyEmpty(line: string): boolean {
-	// The regex explained:
-	// ^\s*      - Matches any whitespace at the start of the line.
-	// (#.*)?    - Optionally matches a group:
-	//   #       - A literal '#' character.
-	//   .*      - Any character, zero or more times (the rest of the comment).
-	// $         - Matches the end of the line.
-	return /^\s*(#.*)?$/.test(line);
-}
-
-function insertAtPosition(text: string, insertLine: number, insertChar: number, insertText: string) {
-	const lines = text.split('\n');
-
-	// If the line doesn't exist, add empty lines up to that point
-	while (lines.length <= insertLine) {
-		lines.push('');
-	}
-
-	let line = lines[insertLine];
-	if (insertChar > line.length) {
-		line += ' '.repeat(insertChar - line.length);
-	}
-	const newLine = line.slice(0, insertChar) + insertText + line.slice(insertChar);
-	lines[insertLine] = newLine;
-
-	return lines.join('\n');
-}
 
 function findEnclosingFunctionSymbol(symbols: vscode.DocumentSymbol[], pos: vscode.Position): vscode.DocumentSymbol | undefined {
 	for (const symbol of symbols) {
@@ -599,8 +680,6 @@ async function getSymbolLocations(symbolLocations: any, document: vscode.TextDoc
 }
 
 
-let llmCompletionTriggered = false;
-
 export function activate(context: vscode.ExtensionContext) {
 	console.log('linecompletion is active');
 
@@ -613,230 +692,6 @@ export function activate(context: vscode.ExtensionContext) {
 			contextProvider.addSelectionToContext();
 		})
 	);
-
-	const provider: vscode.InlineCompletionItemProvider = {
-		async provideInlineCompletionItems(document: vscode.TextDocument, position: vscode.Position, completionContext: vscode.InlineCompletionContext, token: vscode.CancellationToken) {
-			if (!llmCompletionTriggered) {
-				return;
-			}
-			llmCompletionTriggered = false;
-
-			let contextLine = position.line;
-			for (let i = contextLine; i >= Math.max(0, contextLine - 3); i--) {
-				if (!isLineSemanticallyEmpty(document.lineAt(i).text)) {
-					contextLine = i;
-					break;
-				}
-			}
-
-			console.log('Context line ' + contextLine)
-			const contextPosition = new vscode.Position(contextLine, 0);
-
-			const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
-				'vscode.executeDocumentSymbolProvider',
-				document.uri
-			);
-
-			const enclosingFunctionSymbol = findEnclosingFunctionSymbol(symbols, contextPosition);
-
-			let startLine: number;
-			let endLine: number;
-
-			if (enclosingFunctionSymbol) {
-				startLine = enclosingFunctionSymbol.range.start.line;
-				endLine = Math.max(enclosingFunctionSymbol.range.end.line, position.line + 1);
-			} else {
-				console.log('no enclosing function found, using 10 lines around cursor as fallback context')
-				startLine = Math.max(0, position.line - 10);
-				endLine = position.line + 10;
-			}
-
-			const closeContextSource = await fetchSymbolImplementation([{
-				name: '',
-				path: document.uri.fsPath,
-				startLine: position.line,
-				startCol: 0,
-				endLine: position.line,
-				endCol: 100000,
-				expand_to_class: true
-			}]);
-			if (!closeContextSource) {
-				console.error('failed to fetch close context implementation')
-				return [];
-			}
-
-			const closeContext = insertAtPosition(closeContextSource[0].text, position.line - closeContextSource[0].start_line, position.character, '/*@@*/')
-			console.log(closeContext)
-
-			if (enclosingFunctionSymbol) {
-				let referenceLocations = await vscode.commands.executeCommand<vscode.Location[]>(
-					'vscode.executeReferenceProvider',
-					document.uri,
-					enclosingFunctionSymbol.selectionRange.start
-				);
-				referenceLocations = referenceLocations.filter(
-					location => location.range.start.line !== enclosingFunctionSymbol.selectionRange.start.line || location.uri.fsPath !== document.uri.fsPath
-				)
-				console.log(referenceLocations)
-				const referenceImplementations = await fetchSymbolImplementation(referenceLocations.map(ref => ({
-					name: '',
-					path: ref.uri.fsPath,
-					startLine: ref.range.start.line,
-					startCol: ref.range.start.character,
-					endLine: ref.range.end.line,
-					endCol: ref.range.end.character,  // exclusive
-				})))
-				// for each referenceLocation, get the surrounding function or class or context (if in global context)
-				console.log(referenceImplementations)
-				// TODO: store all contexts and their uri and line range in dict, so that we can later easily remove duplicates
-			}
-
-			const symbolLocations = await fetchSymbolLocations(document.uri.fsPath, startLine, endLine);
-			const symbolImplementationLocations = await getSymbolLocations(symbolLocations, document);
-			const symbolImplementations = await fetchSymbolImplementation(symbolImplementationLocations);
-			console.log(symbolImplementations)
-			if (symbolImplementations == null) {
-				console.error('failed to fetch symbol implementations')
-				return [];
-			}
-
-			// symbolImplementations.unshift({text: closeContext})
-
-			// 			const wrappedSymbolImplementations = symbolImplementations.map(impl => {
-			// 				return `\`\`\`python
-			// ${impl.text}
-			// \`\`\``;
-			// 			});
-
-			// const prompt = wrappedSymbolImplementations.join('\n\n')
-			// console.log(prompt)
-
-			console.log('starting fetch')
-			const suggestions = await fetchSuggestions({
-				closeContext,
-				symbolImplementations,
-				llmContext: context.workspaceState.get<any>('llmContext', []),
-				webSearchenabled: context.workspaceState.get<any>('llmContextWebSearchEnabled', false),
-			});
-			console.log('fetched ' + suggestions)
-
-			if (!suggestions || suggestions.length == 0) {
-				vscode.window.showInformationMessage('No suggestion returned from backend.');
-				return [];
-			}
-
-			return suggestions.map((suggestion) => {
-				return new vscode.InlineCompletionItem(suggestion)
-			});
-		}
-	};
-
-	vscode.languages.registerInlineCompletionItemProvider({ language: 'python' }, provider);
-
-	const triggerCommand = vscode.commands.registerCommand('linecompletion.suggestFromContext', () => {
-		llmCompletionTriggered = true;
-		vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
-	});
-
-	context.subscriptions.push(triggerCommand)
-}
-
-async function fetchContext(context: any): Promise<string | null> {
-	try {
-		const response = await fetch('http://127.0.0.1:7524/context', {
-			method: 'POST',
-			body: JSON.stringify(context),
-			headers: { 'Content-Type': 'application/json' }
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error('Backend returned error: ', response.status, errorText);
-			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
-			return null;
-		}
-
-		return await response.json();
-	} catch (err) {
-		console.error('Error contacting backend:', err);
-		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
-		return null;
-	}
-}
-
-// TODO: typing
-async function fetchSymbolImplementation(symbolImplementationLocations: any): Promise<any[] | null> {
-	try {
-		const response = await fetch('http://127.0.0.1:7524/symbol_source', {
-			method: 'POST',
-			body: JSON.stringify(symbolImplementationLocations),
-			headers: { 'Content-Type': 'application/json' }
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error('Backend returned error: ', response.status, errorText);
-			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
-			return null;
-		}
-
-		return await response.json();
-	} catch (err) {
-		console.error('Error contacting backend:', err);
-		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
-		return null;
-	}
-}
-
-async function fetchSymbolLocations(path: string, start_line: number, end_line: number): Promise<any | null> {
-	try {
-		const response = await fetch('http://127.0.0.1:7524/symbol_locations', {
-			method: 'POST',
-			body: JSON.stringify({
-				path: path,
-				start_line: start_line,
-				end_line: end_line,
-			}),
-			headers: { 'Content-Type': 'application/json' }
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error('Backend returned error: ', response.status, errorText);
-			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
-			return null;
-		}
-
-		return await response.json();
-	} catch (err) {
-		console.error('Error contacting backend:', err);
-		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
-		return null;
-	}
-}
-
-async function fetchSuggestions(body: any): Promise<string[] | null> {
-	try {
-		const response = await fetch('http://127.0.0.1:7524/suggest', {
-			method: 'POST',
-			body: JSON.stringify(body),
-			headers: { 'Content-Type': 'application/json' }
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error('Backend returned error: ', response.status, errorText);
-			vscode.window.showErrorMessage(`LineCompletion backend returned an error: ${response.status}`);
-			return null;
-		}
-
-		const data = await response.json();
-		return data.response;
-	} catch (err) {
-		console.error('Error contacting backend:', err);
-		vscode.window.showErrorMessage('Failed to connect to the LineCompletion backend. Please ensure it is running.');
-		return null;
-	}
 }
 
 export function deactivate() {

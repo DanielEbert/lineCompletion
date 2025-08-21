@@ -705,6 +705,72 @@
         #add-tab-btn:hover {
             background-color: rgba(255, 255, 255, 0.1);
         }
+
+        .settings-btn {
+            flex-shrink: 0;
+            width: 28px;
+            height: 28px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+            background-color: transparent;
+            color: var(--vscode-icon-foreground);
+            padding: 0;
+            line-height: 28px;
+            text-align: center;
+        }
+
+        .settings-btn:hover {
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        #settings-panel {
+            padding: 16px;
+            background-color: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            margin-bottom: 16px;
+            border: 1px solid var(--vscode-editor-widget-border);
+        }
+
+        #settings-panel h3 {
+            margin-top: 0;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+
+        .setting {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .setting label {
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .setting input {
+            width: 100%;
+            box-sizing: border-box;
+            background-color: var(--vscode-input-background);
+            color: var(--vscode-input-foreground);
+            border: 1px solid var(--vscode-editor-widget-border);
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--vscode-font-family);
+        }
+
+        .setting input:focus {
+            outline: none;
+            border-color: var(--vscode-focus-border);
+        }
+
+        .setting-description {
+            font-size: 12px;
+            color: var(--vscode-description-foreground);
+            margin: 4px 0 0 0;
+        }
     </style>
 </head>
 
@@ -712,6 +778,15 @@
     <div class="tabs-container">
         <ul id="tabs-list" class="tabs-list"></ul>
         <button id="add-tab-btn" title="New Tab">+</button>
+        <button id="settings-btn" class="settings-btn" title="Settings">⚙️</button>
+    </div>
+    <div id="settings-panel" style="display: none;">
+        <h3>Settings</h3>
+        <div class="setting">
+            <label for="jina-api-key">Jina API Key</label>
+            <input type="password" id="jina-api-key" placeholder="Enter your Jina API key">
+            <p class="setting-description">Used for reading content from URLs.</p>
+        </div>
     </div>
     <div class="header">
         <div class="controls">
@@ -1309,12 +1384,31 @@
             const projectTreeContainer = document.getElementById('project-tree-container');
             const jumpToTopBtn = document.getElementById('jump-to-top-btn');
             const jumpToBottomBtn = document.getElementById('jump-to-bottom-btn');
+            const settingsBtn = document.getElementById('settings-btn');
+            const settingsPanel = document.getElementById('settings-panel');
+            const jinaApiKeyInput = document.getElementById('jina-api-key');
 
             addFileBtn.addEventListener('click', () => vscode.postMessage({ type: 'addFile' }));
             addUrlBtn.addEventListener('click', () => vscode.postMessage({ type: 'addUrl' }));
             addTextBtn.addEventListener('click', () => vscode.postMessage({ type: 'addText' }));
             clearAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'clearContext' }));
             copyAllBtn.addEventListener('click', () => vscode.postMessage({ type: 'copyAllContext' }));
+
+            settingsBtn.addEventListener('click', () => {
+                const isHidden = settingsPanel.style.display === 'none';
+                settingsPanel.style.display = isHidden ? 'block' : 'none';
+            });
+
+            const debouncedApiKeyUpdate = debounce((apiKey) => {
+                vscode.postMessage({
+                    type: 'setJinaApiKey',
+                    apiKey: apiKey
+                });
+            }, 500);
+
+            jinaApiKeyInput.addEventListener('input', (event) => {
+                debouncedApiKeyUpdate(event.target.value);
+            });
 
             geminiBtn.addEventListener('click', () => {
                 vscode.postMessage({ type: 'openUrl', url: 'https://aistudio.google.com/prompts/new_chat?hl=de', pasteDelay: 1500 });
@@ -1352,7 +1446,7 @@
             window.addEventListener('message', event => {
                 const message = event.data;
                 switch (message.type) {
-                    case 'updateState':
+                    case 'update':
                         appState = message.state;
                         renderTabs();
                         const activeInstance = appState.instances.find(i => i.id === appState.activeInstanceId);
@@ -1362,6 +1456,13 @@
                         } else {
                             updateContextList([], -1);
                             updateWebSearchUI(false);
+                        }
+
+                        if (message.settings && typeof message.settings.jinaApiKey !== 'undefined') {
+                            const jinaApiKeyInput = document.getElementById('jina-api-key');
+                            if (document.activeElement !== jinaApiKeyInput) {
+                                jinaApiKeyInput.value = message.settings.jinaApiKey;
+                            }
                         }
                         break;
                     case 'fileSuggestions':
