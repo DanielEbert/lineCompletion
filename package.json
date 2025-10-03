@@ -20,7 +20,29 @@
     "onLanguage:python"
   ],
   "contributes": {
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "linecompletion.addFileToContextFromExplorer",
+          "group": "2_workspace",
+          "when": "!explorerResourceIsFolder"
+        },
+        {
+          "command": "linecompletion.addFolderToContextFromExplorer",
+          "group": "2_workspace",
+          "when": "explorerResourceIsFolder"
+        }
+      ]
+    },
     "commands": [
+      {
+        "command": "linecompletion.addFileToContextFromExplorer",
+        "title": "Add to LLM Context"
+      },
+      {
+        "command": "linecompletion.addFolderToContextFromExplorer",
+        "title": "Add Folder to LLM Context"
+      },
       {
         "command": "linecompletion.suggestFromContext",
         "title": "Suggest Based on Context"

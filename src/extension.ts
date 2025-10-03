@@ -543,6 +543,82 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		return true;
 	}
 
+	private async addDirectoryFilesToContext(
+		dirUri: vscode.Uri,
+		workspaceRoot: string,
+		activeInstance: ContextInstance
+	): Promise<void> {
+		const entries = await vscode.workspace.fs.readDirectory(dirUri);
+
+		for (const [name, type] of entries) {
+			const entryUri = vscode.Uri.joinPath(dirUri, name);
+
+			if (type === vscode.FileType.File) {
+				const relativePath = path.relative(workspaceRoot, entryUri.fsPath);
+				// Check if file is not already in context
+				if (!activeInstance.context.some(item => item.type === 'File' && item.context === relativePath)) {
+					activeInstance.context.push({ type: 'File', context: relativePath });
+				}
+			} else if (type === vscode.FileType.Directory) {
+				// Recursively add files from subdirectories
+				await this.addDirectoryFilesToContext(entryUri, workspaceRoot, activeInstance);
+			}
+		}
+	}
+
+	// Add file/folder from explorer context menu
+	public addFileFromExplorer(uri: vscode.Uri) {
+		const activeInstance = this.getActiveInstance();
+		if (!activeInstance) {
+			vscode.window.showWarningMessage('No active context tab');
+			return;
+		}
+
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders) {
+			vscode.window.showErrorMessage('No workspace folder open');
+			return;
+		}
+
+		const workspaceRoot = workspaceFolders[0].uri.fsPath;
+		const relativePath = path.relative(workspaceRoot, uri.fsPath);
+
+		if (!activeInstance.context.some(item => item.type === 'File' && item.context === relativePath)) {
+			activeInstance.context.push({ type: 'File', context: relativePath });
+			this.updateStateAndRefreshView();
+			vscode.window.showInformationMessage(`Added ${path.basename(relativePath)} to context`);
+		} else {
+			vscode.window.showInformationMessage(`${path.basename(relativePath)} already in context`);
+		}
+	}
+
+	public async addFolderFromExplorer(uri: vscode.Uri) {
+		const activeInstance = this.getActiveInstance();
+		if (!activeInstance) {
+			vscode.window.showWarningMessage('No active context tab');
+			return;
+		}
+
+		const workspaceFolders = vscode.workspace.workspaceFolders;
+		if (!workspaceFolders) {
+			vscode.window.showErrorMessage('No workspace folder open');
+			return;
+		}
+
+		const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+		try {
+			await this.addDirectoryFilesToContext(uri, workspaceRoot, activeInstance);
+			await this.updateStateAndRefreshView();
+
+			const folderName = path.basename(uri.fsPath);
+			vscode.window.showInformationMessage(`Added all files from ${folderName} to context`);
+		} catch (error) {
+			console.error('Error adding folder:', error);
+			vscode.window.showErrorMessage(`Failed to add folder: ${error}`);
+		}
+	}
+
 	private async findWorkspaceFiles() {
 		const workspaceFolders = vscode.workspace.workspaceFolders;
 		if (!workspaceFolders || workspaceFolders.length === 0) {
@@ -708,6 +784,17 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand('linecompletion.addSelectionToContext', () => {
 			contextProvider.addSelectionToContext();
+		})
+	);
+	// Register context menu commands for explorer
+	context.subscriptions.push(
+		vscode.commands.registerCommand('linecompletion.addFileToContextFromExplorer', (uri: vscode.Uri) => {
+			contextProvider.addFileFromExplorer(uri);
+		})
+	);
+	context.subscriptions.push(
+		vscode.commands.registerCommand('linecompletion.addFolderToContextFromExplorer', async (uri: vscode.Uri) => {
+			await contextProvider.addFolderFromExplorer(uri);
 		})
 	);
 }
