@@ -356,7 +356,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					const workspaceFolders = vscode.workspace.workspaceFolders;
 					if (workspaceFolders) {
 						const workspaceRoot = workspaceFolders[0].uri.fsPath;
-						const allFilePaths = files.map(file => path.relative(workspaceRoot, file.path));
+						const allFilePaths = files.map(file => path.relative(workspaceRoot, file.fsPath));
 
 						const fuse = new Fuse(allFilePaths, { threshold: 0.4 });
 						const searchResults = fuse.search(data.query);

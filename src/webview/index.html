@@ -1369,7 +1369,7 @@
                         clearTimeout(textAreaDebounceTimer);
                         textAreaDebounceTimer = setTimeout(() => {
                             handleTextareaInput(e);
-                        }, 500);
+                        }, 300);
                     });
                     textarea.addEventListener('blur', () => hideSuggestions(index));
 
