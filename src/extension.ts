@@ -26,6 +26,12 @@ interface TreeNode {
 	children: { [key: string]: TreeNode };
 }
 
+interface ModelConfig {
+	name: string;
+	url: string;
+	pasteDelay: number;
+}
+
 
 export function getNonce() {
 	let text = '';
@@ -410,6 +416,12 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 					}
 					break;
 				}
+				case 'setModelConfigs': {
+					if (data.models) {
+						await this._context.workspaceState.update('modelConfigs', data.models);
+					}
+					break;
+				}
 				case 'openUrl': {
 					if (data.url) {
 						const success = await this.copyAllContextToClipboard();
@@ -418,7 +430,7 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 						if (process.platform === 'darwin') {
 							setTimeout(() => {
 								exec(
-									'osascript -e \'tell application "System Events" to keystroke "v" using command down\' -e \'tell application "System Events" to key code 36 using command down\'',
+									'osascript -e \'tell application "System Events" to keystroke "v" using command down\' -e \'delay 0.5\' -e \'tell application "System Events" to key code 36\'',
 									(error) => {
 										if (error) {
 											console.error(`Failed to execute paste+enter command: ${error}`);
@@ -450,10 +462,16 @@ export class ContextViewProvider implements vscode.WebviewViewProvider {
 		const contextLength = activeInstance ? activeInstance.context.length : 0;
 		const jinaApiKey = this._context.workspaceState.get<string>('jinaApiKey', '');
 
+		const defaultModels: ModelConfig[] = [
+			{ name: 'Gemini', url: 'https://aistudio.google.com/prompts/new_chat?hl=de', pasteDelay: 1500 },
+			{ name: 'GLM-4.5', url: 'https://chat.z.ai/', pasteDelay: 6000 }
+		];
+		const modelConfigs = this._context.workspaceState.get<ModelConfig[]>('modelConfigs', defaultModels);
+
 		this._view.webview.postMessage({
 			type: 'update',
 			state: state,
-			settings: { jinaApiKey }
+			settings: { jinaApiKey, modelConfigs }
 		});
 
 		this._view.badge = {

@@ -182,10 +182,17 @@
             flex-direction: column;
             align-items: flex-end;
             height: 100%;
+            margin-left: 8px;
         }
 
         .context-item:last-child {
             border-bottom: none;
+        }
+
+        .context-item-main-wrapper {
+            display: flex;
+            align-items: center;
+            width: 100%;
         }
 
         .context-item:hover {
@@ -211,6 +218,8 @@
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-grow: 1;
+            min-width: 0;
         }
 
         .item-badge {
@@ -452,6 +461,8 @@
 
         .suggestion-wrapper {
             position: relative;
+            display: flex;
+            align-items: flex-start;
         }
 
         .suggestion-box {
@@ -771,6 +782,53 @@
             color: var(--vscode-description-foreground);
             margin: 4px 0 0 0;
         }
+
+        #model-buttons-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 100%;
+        }
+
+        .model-config-item {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--vscode-editor-widget-border);
+        }
+
+        .model-config-item:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        .model-config-item>div {
+            flex-grow: 1;
+        }
+
+        .model-config-item .delete-model-btn {
+            background: none;
+            border: none;
+            color: var(--vscode-error-foreground);
+            cursor: pointer;
+            font-size: 20px;
+            padding: 0;
+            line-height: 1;
+            opacity: 0.7;
+        }
+
+        .model-config-item .delete-model-btn:hover {
+            opacity: 1;
+        }
+
+        .model-config-inputs {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
     </style>
 </head>
 
@@ -786,6 +844,13 @@
             <label for="jina-api-key">Jina API Key</label>
             <input type="password" id="jina-api-key" placeholder="Enter your Jina API key">
             <p class="setting-description">Used for reading content from URLs.</p>
+        </div>
+        <div class="setting" style="margin-top: 16px;">
+            <label>Model Configurations</label>
+            <p class="setting-description">Configure the AI models to send the context to.</p>
+            <div id="model-configs-container"></div>
+            <button class="btn btn-secondary" id="add-model-btn" style="margin-top: 8px; width: 100%;">+ Add
+                Model</button>
         </div>
     </div>
     <div class="header">
@@ -828,12 +893,7 @@
         <button class="btn btn-secondary icon-copy copy-all-full" id="copy-all-btn">
             <span>Copy All</span>
         </button>
-        <button class="btn btn-secondary copy-all-full" id="gemini-btn">
-            <span>Gemini</span>
-        </button>
-        <button class="btn btn-secondary copy-all-full" id="glm-btn">
-            <span>GLM-4.5</span>
-        </button>
+        <div id="model-buttons-container"></div>
         <button class="btn btn-secondary icon-clear clear-all-full" id="clear-all-btn">
             <span>Clear All</span>
         </button>
@@ -891,6 +951,86 @@
                 clearTimeout(timeout);
                 timeout = setTimeout(() => func.apply(context, args), wait);
             };
+        }
+
+        // Model config management
+        let modelConfigs = [];
+
+        function renderModelButtons() {
+            const container = document.getElementById("model-buttons-container");
+            container.innerHTML = "";
+            if (!modelConfigs) return;
+            modelConfigs.forEach(model => {
+                const button = document.createElement("button");
+                button.className = "btn btn-secondary copy-all-full";
+                button.innerHTML = `<span>${model.name}</span>`;
+                button.addEventListener("click", () => {
+                    vscode.postMessage({
+                        type: "openUrl",
+                        url: model.url,
+                        pasteDelay: model.pasteDelay
+                    });
+                });
+                container.appendChild(button);
+            });
+        }
+
+        function saveModelConfigs() {
+            vscode.postMessage({
+                type: "setModelConfigs",
+                models: modelConfigs
+            });
+            renderModelButtons();
+        }
+
+        const debouncedSaveModels = debounce(saveModelConfigs, 500);
+
+        function renderModelSettings() {
+            const container = document.getElementById("model-configs-container");
+            container.innerHTML = "";
+            if (!modelConfigs) return;
+            modelConfigs.forEach((model, index) => {
+                const itemDiv = document.createElement("div");
+                itemDiv.className = "model-config-item";
+
+                const nameInput = document.createElement("input");
+                nameInput.type = "text";
+                nameInput.placeholder = "Name";
+                nameInput.value = model.name;
+                nameInput.dataset.index = index;
+                nameInput.dataset.field = "name";
+
+                const urlInput = document.createElement("input");
+                urlInput.type = "text";
+                urlInput.placeholder = "URL";
+                urlInput.value = model.url;
+                urlInput.dataset.index = index;
+                urlInput.dataset.field = "url";
+
+                const delayInput = document.createElement("input");
+                delayInput.type = "number";
+                delayInput.placeholder = "Paste Delay (ms)";
+                delayInput.value = model.pasteDelay;
+                delayInput.dataset.index = index;
+                delayInput.dataset.field = "pasteDelay";
+
+                const deleteBtn = document.createElement("button");
+                deleteBtn.className = "delete-model-btn";
+                deleteBtn.innerHTML = "&times;";
+                deleteBtn.title = "Remove Model";
+                deleteBtn.dataset.index = index;
+
+                const inputWrapper = document.createElement("div");
+                inputWrapper.className = "model-config-inputs";
+                inputWrapper.appendChild(nameInput);
+                inputWrapper.appendChild(urlInput);
+                inputWrapper.appendChild(delayInput);
+
+                itemDiv.appendChild(inputWrapper);
+                itemDiv.appendChild(deleteBtn);
+
+                container.appendChild(itemDiv);
+            });
         }
 
         const debouncedUpdate = debounce((index, newContent) => {
@@ -1011,6 +1151,7 @@
             textarea.value = newTextContent;
             hideSuggestions(index);
 
+            // TODO: not working currently
             focusState = {
                 index: index,
                 cursor: newCursorPos
@@ -1123,14 +1264,10 @@
 
                 if (item.type !== 'Text') {
                     const wrapper = document.createElement('div');
-                    wrapper.style.display = 'flex';
-                    wrapper.style.alignItems = 'center';
-                    wrapper.style.width = '100%';
+                    wrapper.className = 'context-item-main-wrapper';
 
                     const headerDiv = document.createElement('div');
                     headerDiv.className = 'item-header';
-                    headerDiv.style.flexGrow = '1';
-                    headerDiv.style.minWidth = '0';
 
                     const badge = document.createElement('span');
                     badge.className = `item-badge badge-${item.type.toLowerCase()}`;
@@ -1147,7 +1284,6 @@
 
                     const btnCol = document.createElement('div');
                     btnCol.className = 'btn-col';
-                    btnCol.style.marginLeft = '8px';
 
                     const deleteBtn = document.createElement('button');
                     deleteBtn.className = 'delete-btn';
@@ -1165,8 +1301,6 @@
                 if (item.type === 'Text') {
                     const wrapper = document.createElement('div');
                     wrapper.className = 'suggestion-wrapper';
-                    wrapper.style.display = 'flex';
-                    wrapper.style.alignItems = 'flex-start';
 
                     const suggestionBox = document.createElement('div');
                     suggestionBox.className = 'suggestion-box';
@@ -1227,17 +1361,16 @@
                     btnCol.appendChild(ignoreBtn);
                     btnCol.appendChild(deleteBtn);
 
-                    btnCol.style.display = 'flex';
-                    btnCol.style.flexDirection = 'column';
-                    btnCol.style.alignItems = 'flex-end';
-                    btnCol.style.marginLeft = '8px';
-                    btnCol.style.height = '100%';
-
                     wrapper.appendChild(btnCol);
                     contentDiv.appendChild(wrapper);
 
-                    textarea.addEventListener('input', handleTextareaInput);
-                    textarea.addEventListener('keydown', handleTextareaKeydown);
+                    let textAreaDebounceTimer;
+                    textarea.addEventListener('keydown', (e) => {
+                        clearTimeout(textAreaDebounceTimer);
+                        textAreaDebounceTimer = setTimeout(() => {
+                            handleTextareaInput(e);
+                        }, 500);
+                    });
                     textarea.addEventListener('blur', () => hideSuggestions(index));
 
                     setTimeout(() => {
@@ -1379,8 +1512,6 @@
             const webSearchToggle = document.getElementById('web-search-toggle');
             const clearAllBtn = document.getElementById('clear-all-btn');
             const copyAllBtn = document.getElementById('copy-all-btn');
-            const geminiBtn = document.getElementById('gemini-btn');
-            const glmBtn = document.getElementById('glm-btn');
             const projectTreeContainer = document.getElementById('project-tree-container');
             const jumpToTopBtn = document.getElementById('jump-to-top-btn');
             const jumpToBottomBtn = document.getElementById('jump-to-bottom-btn');
@@ -1397,6 +1528,9 @@
             settingsBtn.addEventListener('click', () => {
                 const isHidden = settingsPanel.style.display === 'none';
                 settingsPanel.style.display = isHidden ? 'block' : 'none';
+                if (isHidden) {
+                    renderModelSettings();
+                }
             });
 
             const debouncedApiKeyUpdate = debounce((apiKey) => {
@@ -1408,13 +1542,6 @@
 
             jinaApiKeyInput.addEventListener('input', (event) => {
                 debouncedApiKeyUpdate(event.target.value);
-            });
-
-            geminiBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'openUrl', url: 'https://aistudio.google.com/prompts/new_chat?hl=de', pasteDelay: 1500 });
-            });
-            glmBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'openUrl', url: 'https://chat.z.ai/', pasteDelay: 6000 });  // don't know why, but they take forever to open
             });
 
             projectTreeContainer.addEventListener('change', handleTreeCheckboxChange);
@@ -1464,6 +1591,21 @@
                                 jinaApiKeyInput.value = message.settings.jinaApiKey;
                             }
                         }
+                        if (message.settings && typeof message.settings.modelConfigs !== "undefined") {
+                            modelConfigs = message.settings.modelConfigs;
+                            renderModelButtons();
+                            if (settingsPanel.style.display !== "none") {
+                                renderModelSettings();
+                            }
+                        }
+                        if (focusState.index !== null) {
+                            const textarea = document.querySelector(`textarea[data-index="${focusState.index}"]`);
+                            if (textarea) {
+                                textarea.focus();
+                                textarea.setSelectionRange(focusState.cursor, focusState.cursor);
+                            }
+                            focusState = { index: null, cursor: null }; // Reset after use
+                        }
                         break;
                     case 'fileSuggestions':
                         {
@@ -1507,6 +1649,38 @@
 
             vscode.postMessage({ type: 'requestUpdate' });
             vscode.postMessage({ type: 'getWorkspaceTree' });
+
+            // Model config event listeners
+            const modelConfigsContainer = document.getElementById("model-configs-container");
+            document.getElementById("add-model-btn").addEventListener("click", () => {
+                modelConfigs.push({
+                    name: "New Model",
+                    url: "",
+                    pasteDelay: 1500
+                });
+                saveModelConfigs();
+            });
+
+            modelConfigsContainer.addEventListener("input", (event) => {
+                if (event.target.tagName === "INPUT") {
+                    const index = parseInt(event.target.dataset.index, 10);
+                    const field = event.target.dataset.field;
+                    const value = event.target.type === "number" ? parseInt(event.target.value, 10) || 0 : event.target.value;
+                    if (index >= 0 && index < modelConfigs.length && field) {
+                        modelConfigs[index][field] = value;
+                        debouncedSaveModels();
+                    }
+                }
+            });
+
+            modelConfigsContainer.addEventListener("click", (event) => {
+                if (event.target.classList.contains("delete-model-btn")) {
+                    const index = parseInt(event.target.dataset.index, 10);
+                    modelConfigs.splice(index, 1);
+                    renderModelSettings();
+                    saveModelConfigs();
+                }
+            });
 
             setTimeout(handleScrollButtons, 1000);
         });
